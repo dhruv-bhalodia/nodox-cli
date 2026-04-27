@@ -181,6 +181,51 @@ Run `npx nodox prune` to reset the cache.
 
 ---
 
+## Chain builder & simulation
+
+The **Chain** tab lets you wire routes together into a multi-step flow and execute them in sequence — without leaving the docs UI.
+
+### Building a chain
+
+1. Click **+** next to any route in the sidebar to drop it onto the canvas.
+2. Drag from the right handle of one node to the left handle of another to connect them.
+3. Repeat for as many steps as you need. Circular connections are rejected automatically.
+
+### Running a simulation
+
+Click **▶ Simulate** (top-right of the canvas) to open the simulation panel, then **▶ Run all**.
+
+Steps execute in dependency order (topological sort). Each step shows its HTTP status and the full response body once complete.
+
+### Passing data between steps — `{{stepN.field}}`
+
+Use `{{stepN.field}}` in any input field to splice a value from a previous step's response body into the current step. `N` is the zero-based position of the step you want to read from, and `field` is a dot-separated path into its JSON response.
+
+```
+{{step0.id}}          → top-level field "id" from step 0's response
+{{step0.user.email}}  → nested field
+{{step1.token}}       → field from step 1's response
+```
+
+**Example flow — create a user, then fetch it:**
+
+| Step | Route | Input |
+|------|-------|-------|
+| 0 | `POST /users` | `{ "name": "Alice", "email": "alice@example.com" }` |
+| 1 | `GET /users/:id` | `:id` → `{{step0.id}}` |
+
+After step 0 responds with `{ "id": 42, "name": "Alice" }`, nodox replaces `{{step0.id}}` with `42` before firing the step 1 request — no copy-pasting required.
+
+**Interpolation works everywhere in a step's inputs:**
+
+- Path parameters (e.g. `:id`, `:token`)
+- Individual body fields (when a schema is detected, fields render as a key-value form)
+- The raw JSON body textarea (when no schema is detected)
+
+If a referenced step hasn't run yet, or its response isn't JSON, the placeholder is left as-is so you can see exactly what failed.
+
+---
+
 ## Options
 
 ```js
