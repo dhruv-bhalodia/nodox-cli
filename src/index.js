@@ -135,6 +135,13 @@ export default function nodox(appOrOptions, options = {}) {
     // Force extraction if it hasn't happened yet so the log is accurate
     if (routes.length === 0) {
       const raw = extractRoutes(app)
+      if (schema) {
+        for (const route of raw) {
+          if (!wasRouteRegistered(route.method, route.path) && route.handlers?.length) {
+            schemaOnRouteRegistered(route.method, route.path, route.handlers)
+          }
+        }
+      }
       routes = schema ? enrichRoutesWithSchemas(raw) : raw
     }
 

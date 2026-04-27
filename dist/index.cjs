@@ -2005,6 +2005,13 @@ function nodox(appOrOptions, options = {}) {
     portLogged = true;
     if (routes.length === 0) {
       const raw = extractRoutes(app);
+      if (schema) {
+        for (const route of raw) {
+          if (!wasRouteRegistered(route.method, route.path) && route.handlers?.length) {
+            onRouteRegistered(route.method, route.path, route.handlers);
+          }
+        }
+      }
       routes = schema ? enrichRoutesWithSchemas(raw) : raw;
     }
     console.log(
@@ -2079,7 +2086,7 @@ function nodox(appOrOptions, options = {}) {
       const server = app?._router?.server || app?.server;
       if (server?.listening) {
         logStartup(server.address().port);
-      } else if (!portLogged) {
+      } else if (!portLogged && app) {
         logStartup();
       }
     }
