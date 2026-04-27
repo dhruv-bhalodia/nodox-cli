@@ -57,7 +57,6 @@ function topoSort(nodes, edges) {
   const adj = new Map(nodes.map(n => [n.id, []]))
 
   for (const e of edges) {
-    if (adj.has(e.source)) adj.set(e.source, [])
     adj.get(e.source).push(e.target)
     inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1)
   }
