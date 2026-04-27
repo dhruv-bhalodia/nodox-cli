@@ -245,6 +245,17 @@ function SimPanel({ steps, baseUrl, onClose, savedState, stateRef }) {
           >
             {running ? '⟳ Running…' : '▶ Run all'}
           </button>
+          <button
+            className="sim-clear-btn"
+            onClick={() => {
+              setResults(new Array(steps.length).fill(null))
+              setExpanded(new Array(steps.length).fill(false))
+            }}
+            disabled={running || results.every(r => r === null)}
+            title="Clear results"
+          >
+            Clear
+          </button>
           <button className="sim-close-btn" onClick={onClose} title="Close">✕</button>
         </div>
       </div>

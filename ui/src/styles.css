@@ -1704,6 +1704,22 @@ code {
 .sim-run-btn:hover { opacity: 0.85; }
 .sim-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.sim-clear-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.sim-clear-btn:hover { border-color: var(--border-hover); color: var(--text-secondary); }
+.sim-clear-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
 .sim-close-btn {
   background: transparent;
   border: 1px solid var(--border);
