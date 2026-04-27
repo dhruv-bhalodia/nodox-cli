@@ -236,10 +236,11 @@ export default function nodox(appOrOptions, options = {}) {
       const server = app?._router?.server || app?.server
       if (server?.listening) {
         logStartup(server.address().port)
-      } else if (!portLogged) {
+      } else if (!portLogged && app) {
         // Only log placeholder if we STILL haven't captured the port via listen().
         // For apps that use app.listen(port, () => ...), the patch will usually
-        // have fired by now.
+        // have fired by now. Skip if app is null (no-early-app path) — we'll log
+        // on the first request once req.app is available and routes are known.
         logStartup()
       }
     }
