@@ -52,9 +52,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dhruv-bhalodia/nodox.git"
+    "url": "git+https://github.com/dhruv-bhalodia/nodox-cli.git"
   },
-  "homepage": "https://github.com/dhruv-bhalodia/nodox#readme",
+  "homepage": "https://github.com/dhruv-bhalodia/nodox-cli#readme",
   "bugs": {
     "url": "https://github.com/dhruv-bhalodia/nodox/issues"
   },
