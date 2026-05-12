@@ -222,10 +222,11 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
     )
   }
 
-  const inputSchema  = route.schema?.input  ?? null
-  const outputSchema = route.schema?.output ?? null
-  const inputConf    = route.schema?.inputConfidence  ?? 'none'
-  const outputConf   = route.schema?.outputConfidence ?? 'none'
+  const inputSchema    = route.schema?.input         ?? null
+  const outputSchema   = route.schema?.output        ?? null
+  const outputByStatus = route.schema?.outputByStatus ?? null
+  const inputConf      = route.schema?.inputConfidence  ?? 'none'
+  const outputConf     = route.schema?.outputConfidence ?? 'none'
 
   return (
     <div className="detail-panel">
@@ -271,15 +272,28 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
             label="Request body"
             confidence={inputConf !== 'none' ? inputConf : undefined}
           />
-          {outputSchema && (
-            <div style={{ marginTop: 20 }}>
-              <SchemaTree
-                schema={outputSchema}
-                label="Response body"
-                confidence={outputConf !== 'none' ? outputConf : undefined}
-              />
-            </div>
-          )}
+          {outputByStatus
+            ? Object.entries(outputByStatus)
+                .sort(([a], [b]) => Number(a) - Number(b))
+                .map(([status, resSchema]) => (
+                  <div key={status} style={{ marginTop: 20 }}>
+                    <SchemaTree
+                      schema={resSchema}
+                      label={`Response ${status}`}
+                      confidence="confirmed"
+                    />
+                  </div>
+                ))
+            : outputSchema && (
+                <div style={{ marginTop: 20 }}>
+                  <SchemaTree
+                    schema={outputSchema}
+                    label="Response body"
+                    confidence={outputConf !== 'none' ? outputConf : undefined}
+                  />
+                </div>
+              )
+          }
           {!inputSchema && !outputSchema && (
             <div className="schema-no-data">
               <p>No schema detected yet.</p>
@@ -362,6 +376,31 @@ export default function App() {
     return matchMethod && matchPath
   }), [routes, filter, methodFilter])
 
+  // Group routes by tag when any route has tags declared via validate()
+  const groupedRoutes = useMemo(() => {
+    const hasAnyTags = filtered.some(r => r.schema?.tags?.length)
+    if (!hasAnyTags) return null
+
+    const groups = new Map()
+    const ungrouped = []
+
+    for (const route of filtered) {
+      const routeTags = route.schema?.tags
+      if (!routeTags?.length) {
+        ungrouped.push(route)
+      } else {
+        for (const tag of routeTags) {
+          if (!groups.has(tag)) groups.set(tag, [])
+          groups.get(tag).push(route)
+        }
+      }
+    }
+
+    const result = [...groups.entries()].map(([tag, routes]) => ({ tag, routes }))
+    if (ungrouped.length) result.push({ tag: null, routes: ungrouped })
+    return result
+  }, [filtered])
+
   const activeRoute = selectedRoute
     ? routes.find(r => r.method === selectedRoute.method && r.path === selectedRoute.path) ?? null
     : null
@@ -425,14 +464,28 @@ export default function App() {
           <div className="route-list">
             {filtered.length === 0
               ? <EmptyState status={status} />
-              : filtered.map(route => (
-                  <RouteRow
-                    key={`${route.method}:${route.path}`}
-                    route={route}
-                    isSelected={activeRoute?.method === route.method && activeRoute?.path === route.path}
-                    onClick={() => setSelectedRoute(route)}
-                  />
-                ))
+              : groupedRoutes
+                ? groupedRoutes.map(({ tag, routes: tagRoutes }) => (
+                    <div key={tag ?? '__ungrouped'}>
+                      {tag && <div className="route-group-header">{tag}</div>}
+                      {tagRoutes.map(route => (
+                        <RouteRow
+                          key={`${route.method}:${route.path}`}
+                          route={route}
+                          isSelected={activeRoute?.method === route.method && activeRoute?.path === route.path}
+                          onClick={() => setSelectedRoute(route)}
+                        />
+                      ))}
+                    </div>
+                  ))
+                : filtered.map(route => (
+                    <RouteRow
+                      key={`${route.method}:${route.path}`}
+                      route={route}
+                      isSelected={activeRoute?.method === route.method && activeRoute?.path === route.path}
+                      onClick={() => setSelectedRoute(route)}
+                    />
+                  ))
             }
           </div>
         </>)}
@@ -468,7 +521,18 @@ export default function App() {
         </>)}
 
         <div className="sidebar__footer">
-          <span className="muted">nodox v{version}</span>
+          <div className="sidebar__footer-top">
+            <span className="muted">nodox v{version}</span>
+            <a
+              className="openapi-link"
+              href="/__nodox/openapi.json"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Download OpenAPI 3.1 spec"
+            >
+              OpenAPI ↗
+            </a>
+          </div>
           <EnvSwitcher baseUrl={baseUrl} onChange={handleBaseUrlChange} />
         </div>
       </aside>

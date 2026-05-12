@@ -29,6 +29,7 @@ nodox-cli is different. Add one line and your existing routes are immediately do
 | Schema from real traffic | Yes (Layer 5) | Yes (only mechanism) | No | No | No |
 | Multiple schema detection layers | Yes (5 layers) | No | No | No | No |
 | Chain builder / flow simulation | Yes | No | No | No | Separate Flows tool |
+| OpenAPI 3.1 export | Yes — `/__nodox/openapi.json` | Via separate tooling | Yes (core output) | Yes (core output) | Manual export |
 
 ---
 
@@ -188,6 +189,56 @@ const UserResponse     = z.object({ id: z.number(), name: z.string(), email: z.s
 app.post('/users', validate(CreateUserSchema, { response: UserResponse }), handler)
 ```
 
+### Multiple response schemas
+
+Pass a `responses` map to document different schemas per HTTP status code. This appears in the UI Schema tab and in the OpenAPI export. Use this when your route returns different shapes for different outcomes:
+
+```js
+const CreateUserSchema = z.object({ name: z.string(), email: z.string().email() })
+const UserResponse     = z.object({ id: z.number(), name: z.string(), email: z.string() })
+const ErrorResponse    = z.object({ error: z.string(), details: z.array(z.any()) })
+
+app.post('/users',
+  validate(CreateUserSchema, {
+    responses: {
+      201: UserResponse,
+      400: ErrorResponse,
+      409: z.object({ error: z.string() }),
+    }
+  }),
+  handler
+)
+```
+
+When `responses` is present it takes precedence over `response` in both the UI and the OpenAPI export. Each value accepts Zod, Joi, yup, or a plain JSON Schema object — the same types as the request schema.
+
+### Tag routes for grouping
+
+Pass `tags` to group a route under a named section in the nodox UI sidebar and in the OpenAPI export. Routes sharing a tag are shown together; routes without tags appear below all groups.
+
+```js
+app.get('/users',
+  validate(z.object({}), { tags: ['Users'] }),
+  handler
+)
+
+app.post('/users',
+  validate(CreateUserSchema, { tags: ['Users'], responses: { 201: UserResponse } }),
+  handler
+)
+
+app.post('/login',
+  validate(LoginSchema, { tags: ['Auth'] }),
+  handler
+)
+```
+
+A route can appear in multiple groups by listing more than one tag:
+
+```js
+validate(schema, { tags: ['Users', 'Admin'] })
+```
+
 ### Strict mode
 
 Pass `strict: true` to reject any fields not declared in the schema — unknown fields return a `400`:
@@ -218,11 +269,13 @@ Run `npx nodox prune` to reset the cache.
 
 ## UI features
 
-- **Schema tab** — field names, types, required badges, and a confidence indicator per field
+- **Schema tab** — field names, types, required badges, and a confidence indicator per field; per-status response schemas shown separately when declared via `responses`
+- **Tag grouping** — routes with `tags` declared via `validate()` are grouped under named headers in the sidebar; routes without tags appear below all groups
 - **Playground** — send live requests directly from the browser; path params render as inline inputs; body fields are pre-filled from detected schema; query parameters are documented for GET, DELETE, HEAD, and OPTIONS routes
 - **Chain builder** — connect routes on a canvas, wire output fields to input fields, and simulate multi-step flows with `{{step0.fieldName}}` interpolation
 - **Environment switcher** — swap the base URL between local, staging, and production without leaving the UI
 - **Response diff** — save a baseline response and compare it against subsequent calls to catch regressions
+- **OpenAPI export link** — one-click link in the sidebar footer opens `/__nodox/openapi.json` in a new tab
 
 ### Schema confidence levels
 
@@ -299,6 +352,29 @@ nodox-cli is a **no-op in production** by default (`NODE_ENV=production`). Pass 
 
 ---
 
+## OpenAPI export
+
+nodox-cli serves a live **OpenAPI 3.1** spec at `/__nodox/openapi.json`. It is generated from the same schema data shown in the UI — no separate configuration, no extra step.
+
+```
+GET http://localhost:3000/__nodox/openapi.json
+```
+
+The spec includes:
+
+- All discovered routes as OpenAPI path items
+- Path parameters (`:id` → `{id}`)
+- Query parameters observed from live traffic
+- Request body schemas (POST, PUT, PATCH)
+- Response schemas — per-status when declared via `responses`, or the single observed/confirmed schema otherwise
+- Tags declared via `validate()` for grouping in external tools
+
+You can paste this URL directly into **Swagger UI**, **Redocly**, **Scalar**, or any OpenAPI-compatible viewer. SDK generators like **Speakeasy** or **Fern** can consume it without any extra configuration.
+
+The endpoint is CORS-open (`Access-Control-Allow-Origin: *`) so browser-based tools can fetch it directly.
+
+---
+
 ## CLI
 
 ```bash
@@ -349,14 +425,18 @@ app.delete('/users/:id', validate(IdSchema), handler)         // confirmed + val
 ```
 
 **Mode 3 — Full manual control**
-Use `validate()` on every route with both request and response schemas. Every field is confirmed. Nothing is inferred.
+Use `validate()` on every route with confirmed schemas, tags, and per-status responses. Every field is confirmed. Nothing is inferred.
 
 ```js
 app.use(nodox(app, { schema: false, intercept: false }))  // disable auto-detection
 
 app.post(
   '/users',
-  validate(CreateUserSchema, { response: UserResponse, strict: true }),
+  validate(CreateUserSchema, {
+    tags: ['Users'],
+    responses: { 201: UserResponse, 400: ErrorResponse },
+    strict: true,
+  }),
   handler
 )
 ```
@@ -374,7 +454,7 @@ import nodox, { validate } from 'nodox-cli'
 import type { NodoxOptions, ValidateOptions } from 'nodox-cli'
 ```
 
-`NodoxOptions` covers all middleware options. `ValidateOptions` covers the `strict` and `response` options accepted by `validate()`.
+`NodoxOptions` covers all middleware options. `ValidateOptions` covers the `strict`, `response`, `responses`, and `tags` options accepted by `validate()`.
 
 Both Zod v3 and Zod v4 are supported. nodox-cli uses different patching strategies for each (prototype-level for v3, per-instance for v4) and detects the installed version automatically.
 

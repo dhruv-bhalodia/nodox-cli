@@ -27,11 +27,13 @@ const require = createRequire(import.meta.url)
  * @typedef {Object} RouteSchema
  * @property {object|null} input - JSON Schema for request body (POST/PUT/PATCH)
  * @property {object|null} output - JSON Schema for response body (from Layer 5)
+ * @property {Record<string, object>|null} outputByStatus - per-status response schemas from validate() responses option
  * @property {object|null} querySchema - JSON Schema for query string parameters (observed from live traffic)
  * @property {'confirmed'|'inferred'|'observed'|'none'} inputConfidence
  * @property {'observed'|'none'} outputConfidence
  * @property {'observed'|'none'} querySchemaConfidence
  * @property {string|null} source - Where the schema was defined
+ * @property {string[]|null} tags - route tags from validate()
  */
 
 /**
@@ -191,11 +193,13 @@ function getOrCreateSchema(method, path) {
     routeSchemas.set(key, {
       input: null,
       output: null,
+      outputByStatus: null,
       querySchema: null,
       inputConfidence: 'none',
       outputConfidence: 'none',
       querySchemaConfidence: 'none',
       source: null,
+      tags: null,
     })
   }
   return routeSchemas.get(key)
@@ -664,6 +668,16 @@ export function onRouteRegistered(method, path, handlers) {
       if (handler.__nodoxSchema.outputJsonSchema) {
         entry.output = handler.__nodoxSchema.outputJsonSchema
         entry.outputConfidence = 'confirmed'
+      }
+
+      // Per-status response schemas from validate(schema, { responses: { 200: X, 404: Y } })
+      if (handler.__nodoxSchema.outputByStatus) {
+        entry.outputByStatus = handler.__nodoxSchema.outputByStatus
+      }
+
+      // Tags for grouping in the UI
+      if (handler.__nodoxSchema.tags) {
+        entry.tags = handler.__nodoxSchema.tags
       }
 
       registerSchemaForRoute(method, path, handler.__nodoxSchema)

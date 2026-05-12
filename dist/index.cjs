@@ -395,14 +395,22 @@ function findUiDir() {
   }
   return null;
 }
-function createUiHandler({ uiPath = "/__nodox" } = {}) {
+function createUiHandler({ uiPath = "/__nodox", getState } = {}) {
   const uiDir = findUiDir();
   const assetsPrefix = `${uiPath}/assets`;
+  const openApiPath = `${uiPath}/openapi.json`;
   return function uiHandler(req, res, next) {
     if (!req.path.startsWith(uiPath)) {
       return next();
     }
     _applySecurityHeaders(res);
+    if (req.path === openApiPath) {
+      const state = typeof getState === "function" ? getState() : { routes: [] };
+      const spec = buildOpenApiSpec(state.routes, req);
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.json(spec);
+    }
     if (!uiDir) {
       res.setHeader("Content-Type", "text/html");
       res.send(_notBuiltHtml(uiPath));
@@ -425,8 +433,16 @@ function createUiHandler({ uiPath = "/__nodox" } = {}) {
     }
   };
 }
-function attachUiRoutes(app, { uiPath = "/__nodox" } = {}) {
+function attachUiRoutes(app, { uiPath = "/__nodox", getState } = {}) {
   const uiDir = findUiDir();
+  app.get(`${uiPath}/openapi.json`, (req, res) => {
+    _applySecurityHeaders(res);
+    const state = typeof getState === "function" ? getState() : { routes: [] };
+    const spec = buildOpenApiSpec(state.routes, req);
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.json(spec);
+  });
   if (!uiDir) {
     _registerCatchAll(app, uiPath, (req, res) => {
       _applySecurityHeaders(res);
@@ -521,6 +537,93 @@ function createStaticHandler(dir) {
     }
     _sendAsset(res, filePath);
   };
+}
+var _BODY_METHODS = /* @__PURE__ */ new Set(["post", "put", "patch"]);
+var _PARAM_RE = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
+function buildOpenApiSpec(routes, req) {
+  const host = req?.headers?.host || "localhost";
+  const isHttps = req?.connection?.encrypted || req?.headers?.["x-forwarded-proto"] === "https";
+  const protocol = isHttps ? "https" : "http";
+  const paths = {};
+  for (const route of routes || []) {
+    if (!route.path || route.path.startsWith("/__nodox")) continue;
+    const openApiPath = route.path.replace(_PARAM_RE, "{$1}");
+    if (!paths[openApiPath]) paths[openApiPath] = {};
+    const method = route.method.toLowerCase();
+    const schema = route.schema;
+    const operation = {};
+    if (schema?.tags?.length) operation.tags = schema.tags;
+    const pathParams = [];
+    _PARAM_RE.lastIndex = 0;
+    let m;
+    while ((m = _PARAM_RE.exec(route.path)) !== null) {
+      pathParams.push({ name: m[1], in: "path", required: true, schema: { type: "string" } });
+    }
+    const queryParams = [];
+    if (schema?.querySchema?.properties) {
+      for (const [name, def] of Object.entries(schema.querySchema.properties)) {
+        queryParams.push({ name, in: "query", required: false, schema: def });
+      }
+    }
+    const parameters = [...pathParams, ...queryParams];
+    if (parameters.length) operation.parameters = parameters;
+    if (_BODY_METHODS.has(method) && schema?.input) {
+      operation.requestBody = {
+        required: true,
+        content: { "application/json": { schema: schema.input } }
+      };
+    }
+    const responses = {};
+    if (schema?.outputByStatus) {
+      for (const [statusCode, resSchema] of Object.entries(schema.outputByStatus)) {
+        responses[statusCode] = {
+          description: _httpStatusDescription(Number(statusCode)),
+          content: { "application/json": { schema: resSchema } }
+        };
+      }
+    }
+    if (schema?.output && !responses["200"]) {
+      responses["200"] = {
+        description: "Success",
+        content: { "application/json": { schema: schema.output } }
+      };
+    }
+    if (Object.keys(responses).length === 0) {
+      responses["200"] = { description: "Success" };
+    }
+    operation.responses = responses;
+    paths[openApiPath][method] = operation;
+  }
+  return {
+    openapi: "3.1.0",
+    info: { title: "API", version: "1.0.0" },
+    servers: [{ url: `${protocol}://${host}` }],
+    paths
+  };
+}
+function _httpStatusDescription(code) {
+  const map = {
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    204: "No Content",
+    301: "Moved Permanently",
+    302: "Found",
+    304: "Not Modified",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    409: "Conflict",
+    410: "Gone",
+    422: "Unprocessable Entity",
+    429: "Too Many Requests",
+    500: "Internal Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable"
+  };
+  return map[code] || "Response";
 }
 
 // src/schema/response-interceptor.js
@@ -1075,7 +1178,7 @@ function registerForDryRun(schema, meta) {
 var import_zod_to_json_schema = require("zod-to-json-schema");
 var schemaRegistry = /* @__PURE__ */ new Map();
 function validate(schema, options = {}) {
-  const { strict = false, response: responseSchema } = options;
+  const { strict = false, response: responseSchema, responses, tags } = options;
   const library = detectSchemaLibrary(schema);
   if (!library) {
     throw new Error(
@@ -1094,12 +1197,27 @@ function validate(schema, options = {}) {
       );
     }
   }
+  let outputByStatus = null;
+  if (responses && typeof responses === "object") {
+    outputByStatus = {};
+    for (const [statusCode, resSchema] of Object.entries(responses)) {
+      const resLib = detectSchemaLibrary(resSchema);
+      if (resLib) {
+        const resJson = toJsonSchema(resSchema, resLib);
+        if (resJson) outputByStatus[String(statusCode)] = resJson;
+      }
+    }
+    if (Object.keys(outputByStatus).length === 0) outputByStatus = null;
+  }
+  const normalizedTags = Array.isArray(tags) && tags.length > 0 ? tags.filter((t) => typeof t === "string" && t.length > 0) : null;
   const source = captureValidateCallsite();
   const registeredSchema = {
     library,
     rawSchema: schema,
     jsonSchema,
     outputJsonSchema,
+    outputByStatus,
+    tags: normalizedTags,
     source,
     confidence: "confirmed"
   };
@@ -1457,11 +1575,13 @@ function getOrCreateSchema(method, path3) {
     routeSchemas.set(key, {
       input: null,
       output: null,
+      outputByStatus: null,
       querySchema: null,
       inputConfidence: "none",
       outputConfidence: "none",
       querySchemaConfidence: "none",
-      source: null
+      source: null,
+      tags: null
     });
   }
   return routeSchemas.get(key);
@@ -1801,6 +1921,12 @@ function onRouteRegistered(method, path3, handlers) {
         entry.output = handler.__nodoxSchema.outputJsonSchema;
         entry.outputConfidence = "confirmed";
       }
+      if (handler.__nodoxSchema.outputByStatus) {
+        entry.outputByStatus = handler.__nodoxSchema.outputByStatus;
+      }
+      if (handler.__nodoxSchema.tags) {
+        entry.tags = handler.__nodoxSchema.tags;
+      }
       registerSchemaForRoute(method, path3, handler.__nodoxSchema);
       return;
     }
@@ -2061,7 +2187,7 @@ function nodox(appOrOptions, options = {}) {
         scheduleExtraction();
       }
     });
-    attachUiRoutes(theApp, { uiPath });
+    attachUiRoutes(theApp, { uiPath, getState });
   }
   const wasEarlyInit = !!app;
   if (wasEarlyInit) _initWithApp(app);
@@ -2116,7 +2242,7 @@ function nodox(appOrOptions, options = {}) {
       });
     }
   }) : null;
-  const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath }) : null;
+  const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath, getState }) : null;
   return function nodoxMiddleware(req, res, next) {
     if (!appInitDone && req.app) {
       _initWithApp(req.app);

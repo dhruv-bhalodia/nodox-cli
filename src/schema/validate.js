@@ -56,7 +56,7 @@ export const schemaRegistry = new Map()
  * @returns {Function} Express middleware
  */
 export function validate(schema, options = {}) {
-  const { strict = false, response: responseSchema } = options
+  const { strict = false, response: responseSchema, responses, tags } = options
 
   // Detect schema type
   const library = detectSchemaLibrary(schema)
@@ -84,6 +84,24 @@ export function validate(schema, options = {}) {
     }
   }
 
+  // Convert responses map { [status]: schema } → { [status]: jsonSchema }
+  let outputByStatus = null
+  if (responses && typeof responses === 'object') {
+    outputByStatus = {}
+    for (const [statusCode, resSchema] of Object.entries(responses)) {
+      const resLib = detectSchemaLibrary(resSchema)
+      if (resLib) {
+        const resJson = toJsonSchema(resSchema, resLib)
+        if (resJson) outputByStatus[String(statusCode)] = resJson
+      }
+    }
+    if (Object.keys(outputByStatus).length === 0) outputByStatus = null
+  }
+
+  const normalizedTags = Array.isArray(tags) && tags.length > 0
+    ? tags.filter(t => typeof t === 'string' && t.length > 0)
+    : null
+
   // Capture callsite so UI can show "defined in src/routes/users.js:12"
   const source = captureValidateCallsite()
 
@@ -96,6 +114,8 @@ export function validate(schema, options = {}) {
     rawSchema: schema,
     jsonSchema,
     outputJsonSchema,
+    outputByStatus,
+    tags: normalizedTags,
     source,
     confidence: 'confirmed',
   }

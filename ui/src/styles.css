@@ -362,15 +362,51 @@ body {
 
 .sidebar__footer {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 
+.sidebar__footer-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .sidebar__footer .muted {
   color: var(--text-secondary);
+}
+
+.openapi-link {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: color 0.15s;
+}
+
+.openapi-link:hover {
+  color: var(--accent);
+}
+
+/* ── Route group header (tag grouping) ──────────────── */
+
+.route-group-header {
+  padding: 8px 16px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.route-group-header:first-child {
+  margin-top: 0;
+  border-top: none;
 }
 
 /* ── Sidebar section title ──────────────────────────── */

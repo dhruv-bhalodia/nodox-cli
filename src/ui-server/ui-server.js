@@ -54,16 +54,27 @@ function findUiDir() {
  *
  * @param {object} options
  * @param {string} [options.uiPath='/__nodox']
+ * @param {Function} [options.getState] - returns current { routes } state for OpenAPI generation
  * @returns {Function} Express-compatible (req, res, next) handler
  */
-export function createUiHandler({ uiPath = '/__nodox' } = {}) {
+export function createUiHandler({ uiPath = '/__nodox', getState } = {}) {
   const uiDir = findUiDir()
   const assetsPrefix = `${uiPath}/assets`
+  const openApiPath = `${uiPath}/openapi.json`
 
   return function uiHandler(req, res, next) {
     if (!req.path.startsWith(uiPath)) { return next() }
 
     _applySecurityHeaders(res)
+
+    // OpenAPI spec endpoint
+    if (req.path === openApiPath) {
+      const state = typeof getState === 'function' ? getState() : { routes: [] }
+      const spec = buildOpenApiSpec(state.routes, req)
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      return res.json(spec)
+    }
 
     if (!uiDir) {
       res.setHeader('Content-Type', 'text/html')
@@ -94,9 +105,20 @@ export function createUiHandler({ uiPath = '/__nodox' } = {}) {
  * @param {import('express').Application} app
  * @param {object} options
  * @param {string} [options.uiPath='/__nodox'] - URL prefix for the UI
+ * @param {Function} [options.getState] - returns current { routes } state for OpenAPI generation
  */
-export function attachUiRoutes(app, { uiPath = '/__nodox' } = {}) {
+export function attachUiRoutes(app, { uiPath = '/__nodox', getState } = {}) {
   const uiDir = findUiDir()
+
+  // OpenAPI spec endpoint — must be registered before the SPA catch-all
+  app.get(`${uiPath}/openapi.json`, (req, res) => {
+    _applySecurityHeaders(res)
+    const state = typeof getState === 'function' ? getState() : { routes: [] }
+    const spec = buildOpenApiSpec(state.routes, req)
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.json(spec)
+  })
 
   if (!uiDir) {
     _registerCatchAll(app, uiPath, (req, res) => {
@@ -246,4 +268,112 @@ function createStaticHandler(dir) {
 
     _sendAsset(res, filePath)
   }
+}
+
+// ── OpenAPI spec generation ───────────────────────────────────────────────────
+
+const _BODY_METHODS = new Set(['post', 'put', 'patch'])
+const _PARAM_RE = /:([a-zA-Z_][a-zA-Z0-9_]*)/g
+
+/**
+ * Build an OpenAPI 3.1.0 spec object from the current route + schema state.
+ * @param {object[]} routes - enriched routes from getState()
+ * @param {import('http').IncomingMessage} req - used to derive server URL
+ * @returns {object} OpenAPI spec
+ */
+function buildOpenApiSpec(routes, req) {
+  const host = req?.headers?.host || 'localhost'
+  const isHttps = req?.connection?.encrypted ||
+    req?.headers?.['x-forwarded-proto'] === 'https'
+  const protocol = isHttps ? 'https' : 'http'
+
+  const paths = {}
+
+  for (const route of (routes || [])) {
+    if (!route.path || route.path.startsWith('/__nodox')) continue
+
+    // Convert Express :param segments → OpenAPI {param}
+    const openApiPath = route.path.replace(_PARAM_RE, '{$1}')
+
+    if (!paths[openApiPath]) paths[openApiPath] = {}
+
+    const method = route.method.toLowerCase()
+    const schema = route.schema
+    const operation = {}
+
+    // Tags
+    if (schema?.tags?.length) operation.tags = schema.tags
+
+    // Path parameters — extracted from the original Express path
+    const pathParams = []
+    _PARAM_RE.lastIndex = 0
+    let m
+    while ((m = _PARAM_RE.exec(route.path)) !== null) {
+      pathParams.push({ name: m[1], in: 'path', required: true, schema: { type: 'string' } })
+    }
+
+    // Query parameters — from querySchema (observed on GET/DELETE/HEAD/OPTIONS)
+    const queryParams = []
+    if (schema?.querySchema?.properties) {
+      for (const [name, def] of Object.entries(schema.querySchema.properties)) {
+        queryParams.push({ name, in: 'query', required: false, schema: def })
+      }
+    }
+
+    const parameters = [...pathParams, ...queryParams]
+    if (parameters.length) operation.parameters = parameters
+
+    // Request body — POST, PUT, PATCH only
+    if (_BODY_METHODS.has(method) && schema?.input) {
+      operation.requestBody = {
+        required: true,
+        content: { 'application/json': { schema: schema.input } },
+      }
+    }
+
+    // Responses — per-status map takes priority over single output schema
+    const responses = {}
+
+    if (schema?.outputByStatus) {
+      for (const [statusCode, resSchema] of Object.entries(schema.outputByStatus)) {
+        responses[statusCode] = {
+          description: _httpStatusDescription(Number(statusCode)),
+          content: { 'application/json': { schema: resSchema } },
+        }
+      }
+    }
+
+    if (schema?.output && !responses['200']) {
+      responses['200'] = {
+        description: 'Success',
+        content: { 'application/json': { schema: schema.output } },
+      }
+    }
+
+    if (Object.keys(responses).length === 0) {
+      responses['200'] = { description: 'Success' }
+    }
+
+    operation.responses = responses
+    paths[openApiPath][method] = operation
+  }
+
+  return {
+    openapi: '3.1.0',
+    info: { title: 'API', version: '1.0.0' },
+    servers: [{ url: `${protocol}://${host}` }],
+    paths,
+  }
+}
+
+function _httpStatusDescription(code) {
+  const map = {
+    200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content',
+    301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified',
+    400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict',
+    410: 'Gone', 422: 'Unprocessable Entity', 429: 'Too Many Requests',
+    500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable',
+  }
+  return map[code] || 'Response'
 }

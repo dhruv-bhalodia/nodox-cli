@@ -51,6 +51,30 @@ export interface ValidateOptions {
    * Accepts a Zod schema, Joi schema, or plain JSON Schema object.
    */
   response?: object
+
+  /**
+   * Map of HTTP status codes to response schemas. Used for documentation only.
+   * When present, overrides `response` in the UI and in the OpenAPI export.
+   * Each value accepts a Zod schema, Joi schema, or plain JSON Schema object.
+   *
+   * @example
+   * validate(CreateUserSchema, {
+   *   responses: {
+   *     201: UserSchema,
+   *     400: ErrorSchema,
+   *   }
+   * })
+   */
+  responses?: Record<string | number, object>
+
+  /**
+   * Tags for grouping this route in the nodox UI and the OpenAPI export.
+   * Routes sharing a tag are collapsed under that tag in the sidebar.
+   *
+   * @example
+   * validate(CreateUserSchema, { tags: ['Users'] })
+   */
+  tags?: string[]
 }
 
 /**

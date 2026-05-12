@@ -205,7 +205,7 @@ export default function nodox(appOrOptions, options = {}) {
       }
     })
 
-    attachUiRoutes(theApp, { uiPath })
+    attachUiRoutes(theApp, { uiPath, getState })
   }
 
   // Early init — only possible when app was passed to nodox()
@@ -285,7 +285,7 @@ export default function nodox(appOrOptions, options = {}) {
 
   // Inline UI handler — only used in the no-early-app path.
   // When app IS provided early, attachUiRoutes registers routes that handle /__nodox.
-  const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath }) : null
+  const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath, getState }) : null
 
   return function nodoxMiddleware(req, res, next) {
     // Late init: grab app from req.app on the first request (no-arg path)
