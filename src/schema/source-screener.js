@@ -54,6 +54,11 @@ const YUP_PATTERNS = [
 // Valibot routes are covered by live observation (req.body / res.json interception).
 const VALIBOT_PATTERNS = []
 
+// TypeBox uses Value.Check / Value.Parse from @sinclair/typebox/value.
+// Flagging for dry-run is not useful — TypeBox validation is functional and won't
+// be captured by the schema-patcher. Covered by live observation instead.
+const TYPEBOX_PATTERNS = []
+
 /**
  * Known non-validator function names — exact matches are skipped with zero
  * source-inspection cost. Covers Express built-ins, popular npm middleware,
@@ -182,7 +187,8 @@ export function looksLikeValidator(fn) {
   return ZOD_PATTERNS.some(p => p.test(compressed)) ||
          JOI_PATTERNS.some(p => p.test(compressed)) ||
          YUP_PATTERNS.some(p => p.test(compressed)) ||
-         VALIBOT_PATTERNS.some(p => p.test(compressed))
+         VALIBOT_PATTERNS.some(p => p.test(compressed)) ||
+         TYPEBOX_PATTERNS.some(p => p.test(compressed))
 }
 
 /**

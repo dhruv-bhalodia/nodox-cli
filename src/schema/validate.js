@@ -24,10 +24,33 @@
  *   - Produces a complete JSON Schema in the UI immediately on startup
  *   - The validate() call IS your validation — no duplication
  *
- * Supports: Zod schemas, Joi schemas, plain JSON Schema objects
+ * Supports: Zod schemas, Joi schemas, yup schemas, Valibot schemas,
+ *           TypeBox schemas, plain JSON Schema objects
  */
 
 import { zodToJsonSchema } from 'zod-to-json-schema'
+import { createRequire } from 'module'
+
+const _require = createRequire(import.meta.url)
+
+// TypeBox uses a well-known Symbol to tag its schema objects
+const _TYPEBOX_KIND = Symbol.for('TypeBox.Kind')
+
+// Lazy-loaded module cache for optional peer deps
+let _valibotModule = null
+let _typeboxValueModule = null
+
+async function _getValibot() {
+  if (_valibotModule !== undefined) return _valibotModule
+  try { _valibotModule = await import('valibot') } catch { _valibotModule = null }
+  return _valibotModule
+}
+
+async function _getTypeBoxValue() {
+  if (_typeboxValueModule !== undefined) return _typeboxValueModule
+  try { _typeboxValueModule = await import('@sinclair/typebox/value') } catch { _typeboxValueModule = null }
+  return _typeboxValueModule
+}
 
 /**
  * Internal registry: route key → registered schema info
@@ -56,7 +79,7 @@ export const schemaRegistry = new Map()
  * @returns {Function} Express middleware
  */
 export function validate(schema, options = {}) {
-  const { strict = false, response: responseSchema, responses, tags } = options
+  const { strict = false, response: responseSchema, responses, tags, meta, auth, externalDocs, problemDetails = false } = options
 
   // Detect schema type
   const library = detectSchemaLibrary(schema)
@@ -102,6 +125,44 @@ export function validate(schema, options = {}) {
     ? tags.filter(t => typeof t === 'string' && t.length > 0)
     : null
 
+  // Normalize meta — only keep known keys with correct types
+  let normalizedMeta = null
+  if (meta && typeof meta === 'object') {
+    const m = {}
+    if (typeof meta.summary === 'string' && meta.summary.trim()) m.summary = meta.summary.trim()
+    if (typeof meta.description === 'string' && meta.description.trim()) m.description = meta.description.trim()
+    if (meta.examples && typeof meta.examples === 'object') m.examples = meta.examples
+    if (meta.deprecated === true) m.deprecated = true
+    if (Object.keys(m).length > 0) normalizedMeta = m
+  }
+
+  // Normalize auth — validate type and type-specific fields
+  const _VALID_AUTH_TYPES = new Set(['bearer', 'apiKey', 'basic', 'oauth2'])
+  let normalizedAuth = null
+  if (auth && typeof auth === 'object' && _VALID_AUTH_TYPES.has(auth.type)) {
+    const a = { type: auth.type }
+    if (typeof auth.description === 'string' && auth.description.trim()) {
+      a.description = auth.description.trim()
+    }
+    if (auth.type === 'apiKey') {
+      a.name = typeof auth.name === 'string' && auth.name.trim() ? auth.name.trim() : 'X-API-Key'
+      a.in = ['header', 'query', 'cookie'].includes(auth.in) ? auth.in : 'header'
+    }
+    if (auth.type === 'oauth2' && Array.isArray(auth.scopes)) {
+      a.scopes = auth.scopes.filter(s => typeof s === 'string' && s.length > 0)
+    }
+    normalizedAuth = a
+  }
+
+  // Normalize externalDocs — must have a valid URL string
+  let normalizedExternalDocs = null
+  if (externalDocs && typeof externalDocs === 'object' && typeof externalDocs.url === 'string' && externalDocs.url.trim()) {
+    normalizedExternalDocs = { url: externalDocs.url.trim() }
+    if (typeof externalDocs.description === 'string' && externalDocs.description.trim()) {
+      normalizedExternalDocs.description = externalDocs.description.trim()
+    }
+  }
+
   // Capture callsite so UI can show "defined in src/routes/users.js:12"
   const source = captureValidateCallsite()
 
@@ -116,6 +177,10 @@ export function validate(schema, options = {}) {
     outputJsonSchema,
     outputByStatus,
     tags: normalizedTags,
+    meta: normalizedMeta,
+    auth: normalizedAuth,
+    externalDocs: normalizedExternalDocs,
+    problemDetails,
     source,
     confidence: 'confirmed',
   }
@@ -123,11 +188,27 @@ export function validate(schema, options = {}) {
   /**
    * The actual Express middleware.
    * Runs schema.safeParse (Zod) or schema.validate (Joi) on req.body.
-   * On failure: 400 with validation error detail.
+   * On failure: 400 with validation error detail (or RFC 7807 Problem Details if problemDetails: true).
    * On success: replaces req.body with parsed/coerced value and calls next().
    */
-  function nodoxValidateMiddleware(req, res, next) {
+  async function nodoxValidateMiddleware(req, res, next) {
     let result
+
+    const _sendError = (details) => {
+      if (problemDetails) {
+        return res.status(400).json({
+          type: 'about:blank',
+          title: 'Validation Failed',
+          status: 400,
+          detail: 'One or more fields failed validation.',
+          errors: details.map(d => ({
+            pointer: d.path ? `/${d.path.replace(/\./g, '/')}` : '/',
+            detail: d.message,
+          })),
+        })
+      }
+      return res.status(400).json({ error: 'Validation failed', details })
+    }
 
     try {
       if (library === 'zod') {
@@ -136,16 +217,12 @@ export function validate(schema, options = {}) {
           : schema.safeParse(req.body)
 
         if (!result.success) {
-          // Zod v4 uses .issues, v3 uses .errors — support both
           const issues = result.error.issues ?? result.error.errors ?? []
-          return res.status(400).json({
-            error: 'Validation failed',
-            details: issues.map(e => ({
-              path: Array.isArray(e.path) ? e.path.join('.') : String(e.path ?? ''),
-              message: e.message,
-              code: e.code,
-            }))
-          })
+          return _sendError(issues.map(e => ({
+            path: Array.isArray(e.path) ? e.path.join('.') : String(e.path ?? ''),
+            message: e.message,
+            code: e.code,
+          })))
         }
         req.body = result.data
 
@@ -156,43 +233,60 @@ export function validate(schema, options = {}) {
         })
 
         if (error) {
-          return res.status(400).json({
-            error: 'Validation failed',
-            details: error.details.map(d => ({
-              path: d.path.join('.'),
-              message: d.message,
-              type: d.type,
-            }))
-          })
+          return _sendError(error.details.map(d => ({
+            path: d.path.join('.'),
+            message: d.message,
+            type: d.type,
+          })))
         }
         req.body = value
 
       } else if (library === 'yup') {
-        // yup.validateSync() throws a ValidationError on failure
         req.body = schema.validateSync(req.body, {
           abortEarly: false,
           stripUnknown: !strict,
         })
 
+      } else if (library === 'valibot') {
+        const v = await _getValibot()
+        if (v && typeof v.safeParse === 'function') {
+          const vResult = v.safeParse(schema, req.body)
+          if (!vResult.success) {
+            return _sendError((vResult.issues || []).map(issue => ({
+              path: issue.path?.map(p => String(p.key ?? p)).join('.') ?? '',
+              message: issue.message,
+              code: issue.type,
+            })))
+          }
+          req.body = vResult.output
+        }
+
+      } else if (library === 'typebox') {
+        const tbv = await _getTypeBoxValue()
+        if (tbv?.Value && typeof tbv.Value.Check === 'function') {
+          if (!tbv.Value.Check(schema, req.body)) {
+            const errors = [...tbv.Value.Errors(schema, req.body)]
+            return _sendError(errors.map(e => ({
+              path: e.path?.replace(/^\//, '').replace(/\//g, '.') ?? '',
+              message: e.message,
+              code: 'invalid_value',
+            })))
+          }
+          // TypeBox doesn't coerce by default — pass through as-is
+        }
+
       } else if (library === 'jsonschema') {
-        // For plain JSON Schema, do a basic type check
-        // (Full JSON Schema validation requires a library like ajv — not bundled)
-        // nodox registers the schema for display but doesn't validate beyond type
+        // Display-only — no runtime validation
         req.body = req.body
       }
     } catch (err) {
-      // yup throws ValidationError on invalid input — return 400
       if (err?.name === 'ValidationError' && err?.inner) {
-        return res.status(400).json({
-          error: 'Validation failed',
-          details: (err.inner.length ? err.inner : [err]).map(e => ({
-            path: e.path || '',
-            message: e.message,
-            type: e.type,
-          }))
-        })
+        return _sendError((err.inner.length ? err.inner : [err]).map(e => ({
+          path: e.path || '',
+          message: e.message,
+          type: e.type,
+        })))
       }
-      // Other schema validation errors — unexpected
       console.error('[nodox] validate() middleware threw unexpectedly:', err)
       return res.status(500).json({ error: 'Internal validation error' })
     }
@@ -210,7 +304,7 @@ export function validate(schema, options = {}) {
 /**
  * Detect which schema library produced a given schema object.
  * @param {any} schema
- * @returns {'zod'|'joi'|'yup'|'jsonschema'|null}
+ * @returns {'zod'|'joi'|'yup'|'valibot'|'typebox'|'jsonschema'|null}
  */
 export function detectSchemaLibrary(schema) {
   if (!schema || typeof schema !== 'object') return null
@@ -228,6 +322,13 @@ export function detectSchemaLibrary(schema) {
   if (schema._type && typeof schema.validateSync === 'function') return 'yup'
   if (schema.__isYupSchema__ && typeof schema.validate === 'function') return 'yup'
 
+  // Valibot v1: '~standard' interface with vendor tag; older: kind='schema' + _run
+  if (schema['~standard']?.vendor === 'valibot') return 'valibot'
+  if (schema.kind === 'schema' && typeof schema._run === 'function') return 'valibot'
+
+  // TypeBox: tagged with Symbol.for('TypeBox.Kind') — schemas are already JSON Schema
+  if (_TYPEBOX_KIND in schema) return 'typebox'
+
   // Plain JSON Schema: has type/properties but not zod-like methods
   if ((schema.type || schema.properties || schema.$schema || schema.anyOf) &&
       typeof schema.safeParse !== 'function') return 'jsonschema'
@@ -238,7 +339,7 @@ export function detectSchemaLibrary(schema) {
 /**
  * Convert any supported schema to JSON Schema format.
  * @param {object} schema
- * @param {'zod'|'joi'|'jsonschema'} library
+ * @param {'zod'|'joi'|'yup'|'valibot'|'typebox'|'jsonschema'} library
  * @returns {object} JSON Schema object
  */
 export function toJsonSchema(schema, library) {
@@ -247,7 +348,6 @@ export function toJsonSchema(schema, library) {
       // Zod v4 has a native toJSONSchema() method — prefer it
       if (typeof schema.toJSONSchema === 'function') {
         const result = schema.toJSONSchema()
-        // Remove $schema to keep output clean for UI rendering
         const { $schema, ...rest } = result
         return rest
       }
@@ -259,13 +359,29 @@ export function toJsonSchema(schema, library) {
     }
 
     if (library === 'joi') {
-      // Joi doesn't have a built-in JSON Schema converter in all versions.
-      // We do a best-effort structural extraction.
       return joiToJsonSchema(schema)
     }
 
     if (library === 'yup') {
       return yupToJsonSchema(schema)
+    }
+
+    if (library === 'valibot') {
+      // Try the official converter first (valibot ≥ 1.0 ships @valibot/to-json-schema or a built-in)
+      try {
+        const v = _require('valibot')
+        if (typeof v.toJsonSchema === 'function') {
+          return v.toJsonSchema(schema)
+        }
+      } catch { /* not available — fall through to structural extraction */ }
+      return valibotToJsonSchema(schema)
+    }
+
+    if (library === 'typebox') {
+      // TypeBox schemas ARE JSON Schema objects — strip TypeBox-only Symbol keys (they
+      // don't serialize anyway) and pass through. Remove $schema to match our other converters.
+      const { $schema, ...rest } = schema
+      return rest
     }
 
     if (library === 'jsonschema') {
@@ -334,6 +450,12 @@ function yupDescToJsonSchema(desc) {
   }
 
   if (desc.label) out.description = desc.label
+
+  // yup .nullable() sets desc.nullable = true
+  if (desc.nullable === true && out.type && out.type !== 'null') {
+    out.type = [out.type, 'null']
+  }
+
   return out
 }
 
@@ -405,6 +527,11 @@ function joiDescToJsonSchema(desc) {
     out.description = desc.flags.description
   }
 
+  // Nullable: Joi's .allow(null) sets allow array containing null
+  if (Array.isArray(desc.allow) && desc.allow.includes(null) && out.type && out.type !== 'null') {
+    out.type = [out.type, 'null']
+  }
+
   return out
 }
 
@@ -429,6 +556,61 @@ export function registerSchemaForRoute(method, path, schema) {
  */
 export function getSchemaForRoute(method, path) {
   return schemaRegistry.get(`${method.toUpperCase()}:${path}`) ?? null
+}
+
+/**
+ * Best-effort Valibot → JSON Schema structural extraction.
+ * Used when the valibot package's own toJsonSchema is unavailable.
+ * Handles object, string, number, boolean, array, optional, nullable, union.
+ * @param {object} schema - valibot schema object
+ * @param {number} [depth=0] - recursion guard
+ * @returns {object} JSON Schema object
+ */
+function valibotToJsonSchema(schema, depth = 0) {
+  if (depth > 12 || !schema || typeof schema !== 'object') return {}
+  const type = schema.type
+
+  if (type === 'object' && schema.entries) {
+    const properties = {}
+    const required = []
+    for (const [key, field] of Object.entries(schema.entries)) {
+      properties[key] = valibotToJsonSchema(field, depth + 1)
+      if (field.type !== 'optional' && field.type !== 'nullish') required.push(key)
+    }
+    const out = { type: 'object', properties }
+    if (required.length) out.required = required
+    return out
+  }
+
+  if ((type === 'optional' || type === 'nullish') && schema.wrapped) {
+    const inner = valibotToJsonSchema(schema.wrapped, depth + 1)
+    if (type === 'nullish') return { ...inner, type: [inner.type || 'string', 'null'] }
+    return inner
+  }
+
+  if (type === 'nullable' && schema.wrapped) {
+    const inner = valibotToJsonSchema(schema.wrapped, depth + 1)
+    return { ...inner, type: [inner.type || 'string', 'null'] }
+  }
+
+  if (type === 'array') {
+    const out = { type: 'array' }
+    if (schema.item) out.items = valibotToJsonSchema(schema.item, depth + 1)
+    return out
+  }
+
+  if (type === 'union' && Array.isArray(schema.options)) {
+    return { anyOf: schema.options.map(o => valibotToJsonSchema(o, depth + 1)) }
+  }
+
+  if (type === 'picklist' && Array.isArray(schema.options)) {
+    return { type: 'string', enum: schema.options }
+  }
+
+  const primitive = { string: 'string', number: 'number', boolean: 'boolean', null: 'null' }
+  if (primitive[type]) return { type: primitive[type] }
+
+  return { type: 'object' }
 }
 
 function captureValidateCallsite() {

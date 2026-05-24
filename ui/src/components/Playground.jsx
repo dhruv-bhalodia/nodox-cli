@@ -13,7 +13,7 @@
  * Schema diffing: save a response as baseline, then compare against subsequent responses.
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH'])
 
@@ -210,6 +210,71 @@ function DiffView({ baseline, current }) {
   )
 }
 
+// ── Code snippet generators ───────────────────────────────────────────────────
+
+function buildSnippets(method, url, headers, bodyStr) {
+  const headerLines = Object.entries(headers)
+    .filter(([k]) => k)
+    .map(([k, v]) => `  -H '${k}: ${v}'`)
+
+  const hasBody = bodyStr && bodyStr.trim() && !['GET', 'HEAD', 'DELETE'].includes(method)
+
+  const curl = [
+    `curl -X ${method} '${url}'`,
+    ...headerLines,
+    hasBody ? `  -d '${bodyStr.replace(/'/g, "'\\''")}'\n` : '',
+  ].filter(Boolean).join(' \\\n')
+
+  const fetchHeadersObj = Object.entries(headers).filter(([k]) => k)
+  const fetchHeaders = fetchHeadersObj.length
+    ? `  headers: {\n${fetchHeadersObj.map(([k, v]) => `    '${k}': '${v}'`).join(',\n')}\n  },`
+    : ''
+  const fetchBody = hasBody ? `  body: JSON.stringify(${bodyStr}),` : ''
+  const fetch = `fetch('${url}', {\n  method: '${method}',\n${fetchHeaders ? fetchHeaders + '\n' : ''}${fetchBody ? fetchBody + '\n' : ''}})
+  .then(r => r.json())
+  .then(console.log)`
+
+  const pyHeaders = fetchHeadersObj.length
+    ? `headers = {\n${fetchHeadersObj.map(([k, v]) => `    '${k}': '${v}'`).join(',\n')}\n}\n`
+    : ''
+  const pyMethod = method.toLowerCase()
+  const pyBody = hasBody ? `, json=${bodyStr}` : ''
+  const python = `import requests\n\n${pyHeaders}r = requests.${pyMethod}('${url}'${pyBody}${fetchHeadersObj.length ? ', headers=headers' : ''})\nprint(r.json())`
+
+  return { curl, fetch, python }
+}
+
+function CodeSnippets({ method, url, headers, bodyStr }) {
+  const [lang, setLang] = useState('curl')
+  const [copied, setCopied] = useState(false)
+  const snippets = useMemo(() => buildSnippets(method, url, headers, bodyStr), [method, url, headers, bodyStr])
+
+  function copy() {
+    navigator.clipboard?.writeText(snippets[lang]).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="code-snippets">
+      <div className="code-snippets__header">
+        <div className="code-snippets__tabs">
+          {['curl', 'fetch', 'python'].map(l => (
+            <button
+              key={l}
+              className={`code-snippet-tab ${lang === l ? 'code-snippet-tab--active' : ''}`}
+              onClick={() => setLang(l)}
+            >{l}</button>
+          ))}
+        </div>
+        <button className="code-snippet-copy" onClick={copy}>{copied ? '✓ copied' : 'copy'}</button>
+      </div>
+      <pre className="code-snippets__body">{snippets[lang]}</pre>
+    </div>
+  )
+}
+
 // ── Playground ────────────────────────────────────────────────────────────────
 
 export function Playground({ route, baseUrl = '', cache }) {
@@ -218,6 +283,7 @@ export function Playground({ route, baseUrl = '', cache }) {
 
   const pathParams = extractPathParams(route.path)
   const showBody = BODY_METHODS.has(route.method)
+  const [showSnippets, setShowSnippets] = useState(false)
 
   // Derive schema fields once — used to decide which body editor to show
   const schemaFields = showBody ? getSchemaFields(route.schema?.input) : null
@@ -394,6 +460,28 @@ export function Playground({ route, baseUrl = '', cache }) {
           <div className="playground__section-label">
             Body
             {bodyError && <span className="body-error">{bodyError}</span>}
+            {route.schema?.meta?.examples?.body && (
+              <button
+                className="load-example-btn"
+                onClick={() => {
+                  const example = route.schema.meta.examples.body
+                  if (bodyFields.length > 0) {
+                    setBodyFields(fields => fields.map(f => ({
+                      ...f,
+                      value: f.key in example ? String(
+                        typeof example[f.key] === 'object'
+                          ? JSON.stringify(example[f.key])
+                          : example[f.key]
+                      ) : f.value,
+                    })))
+                  } else {
+                    handleBodyChange(JSON.stringify(example, null, 2))
+                  }
+                }}
+              >
+                Load example
+              </button>
+            )}
           </div>
           {bodyFields.length > 0 ? (
             <div className="schema-body-editor">
@@ -432,6 +520,36 @@ export function Playground({ route, baseUrl = '', cache }) {
           )}
         </div>
       )}
+
+      {/* Code snippets */}
+      <div className="playground__section">
+        <button
+          className="playground__section-label code-snippets__toggle"
+          onClick={() => setShowSnippets(s => !s)}
+          style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <span>{showSnippets ? '▾' : '▸'}</span>
+          Code snippets
+        </button>
+        {showSnippets && (() => {
+          const url = buildUrl(route.path, pathValues, queryParams, baseUrl || window.location.origin)
+          const reqHeaders = { 'Accept': 'application/json' }
+          for (const { key, value } of headers) { if (key) reqHeaders[key] = value }
+          let bodyStr = ''
+          if (showBody) {
+            if (bodyFields.length > 0) {
+              const obj = {}
+              for (const f of bodyFields) {
+                if (f.value !== '') obj[f.key] = parseFieldValue(f.value, f.type)
+              }
+              if (Object.keys(obj).length > 0) bodyStr = JSON.stringify(obj, null, 2)
+            } else if (body.trim()) {
+              bodyStr = body
+            }
+          }
+          return <CodeSnippets method={route.method} url={url} headers={reqHeaders} bodyStr={bodyStr} />
+        })()}
+      </div>
 
       {/* Response */}
       {response && (

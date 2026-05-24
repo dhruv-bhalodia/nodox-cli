@@ -39,6 +39,27 @@
   --header-height: 54px;
 }
 
+/* ── Light mode theme ────────────────────────────────── */
+
+[data-theme="light"] {
+  --bg-base:      #f8f8f8;
+  --bg-surface:   #ffffff;
+  --bg-elevated:  #f0f0f0;
+  --bg-hover:     #e8e8e8;
+  --bg-selected:  #e4eeff;
+
+  --border:       #e0e0e0;
+  --border-hover: #c8c8c8;
+  --border-focus: #a0a0a0;
+
+  --text-primary:   #111111;
+  --text-secondary: #444444;
+  --text-muted:     #888888;
+
+  --accent:       #0369a1;
+  --accent-dim:   #e0f2fe;
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;
@@ -232,6 +253,48 @@ body {
   color: var(--text-primary);
 }
 
+/* ── Version Filters ────────────────────────────────── */
+
+.version-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+
+.version-filter-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s;
+  letter-spacing: 0.5px;
+}
+
+.version-filter-btn:hover {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.version-filter-btn--active {
+  background: #0d1f2b;
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
+[data-theme="light"] .version-filter-btn--active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
 /* ── Route Count ────────────────────────────────────── */
 
 .sidebar__count {
@@ -344,6 +407,12 @@ body {
   background: #0d2b1a;
   border: 1px solid #166534;
   color: #4ade80;
+}
+
+.route-auth-lock {
+  font-size: 10px;
+  flex-shrink: 0;
+  opacity: 0.6;
 }
 
 .route-arrow {
@@ -565,11 +634,30 @@ body {
 
 .detail-panel__header {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   margin-bottom: 32px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--border);
+}
+
+.detail-panel__header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.detail-panel__summary {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.detail-panel__description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
 }
 
 .detail-panel__path {
@@ -590,6 +678,106 @@ body {
   letter-spacing: 1px;
   color: var(--text-secondary);
   margin-bottom: 10px;
+}
+
+/* ── Auth Badge ─────────────────────────────────────── */
+
+.auth-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+
+.auth-badge--bearer {
+  background: #1a2b1a;
+  border-color: #22c55e44;
+  color: #4ade80;
+}
+
+.auth-badge--apiKey {
+  background: #1a1a2b;
+  border-color: #3b82f644;
+  color: #60a5fa;
+}
+
+.auth-badge--basic {
+  background: #2b1a1a;
+  border-color: #ef444444;
+  color: #f87171;
+}
+
+.auth-badge--oauth2 {
+  background: #1f1a2b;
+  border-color: #a78bfa44;
+  color: #c4b5fd;
+}
+
+/* ── Auth Info Block ─────────────────────────────────── */
+
+.auth-info {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.auth-info__title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.auth-info__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.auth-info__row:last-child { margin-bottom: 0; }
+
+.auth-info__label {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 48px;
+}
+
+.auth-info__value {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* ── Example code blocks ─────────────────────────────── */
+
+.example-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.example-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  line-height: 1.6;
 }
 
 /* ── Middleware Chain ───────────────────────────────── */
@@ -968,6 +1156,27 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.load-example-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hover);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: auto;
+  letter-spacing: 0.3px;
+  transition: all 0.12s;
+  text-transform: none;
+}
+
+.load-example-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
 }
 
 .kv-editor {
@@ -2052,6 +2261,36 @@ code {
   box-shadow: none !important;
 }
 
+/* Light mode overrides for hardcoded-color elements */
+[data-theme="light"] .schema-block--present {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+}
+[data-theme="light"] .route-tag--confirmed { background: #f0fdf4; border-color: #86efac; color: #166534; }
+[data-theme="light"] .route-tag--inferred  { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+[data-theme="light"] .field-required { color: #dc2626; border-color: #fca5a5; background: #fef2f2; }
+[data-theme="light"] .body-error { color: #dc2626; background: #fef2f2; border-color: #fca5a5; }
+[data-theme="light"] .body-editor--error { border-color: #dc2626; }
+[data-theme="light"] .auth-badge--bearer { background: #f0fdf4; border-color: #86efac44; color: #166534; }
+[data-theme="light"] .auth-badge--apiKey { background: #eff6ff; border-color: #93c5fd44; color: #1d4ed8; }
+[data-theme="light"] .auth-badge--basic  { background: #fef2f2; border-color: #fca5a544; color: #dc2626; }
+[data-theme="light"] .auth-badge--oauth2 { background: #faf5ff; border-color: #c4b5fd44; color: #7c3aed; }
+[data-theme="light"] .baseline-bar { background: #f0fdf4; border-color: #86efac; color: #166534; }
+[data-theme="light"] .baseline-bar__clear { border-color: #86efac; color: #166534; }
+[data-theme="light"] .baseline-bar__clear:hover { background: #86efac; color: #052e16; }
+[data-theme="light"] .save-baseline-btn:hover { border-color: #166534; color: #166534; background: #f0fdf4; }
+[data-theme="light"] .diff-identical { background: #f0fdf4; color: #166534; }
+[data-theme="light"] .diff-row--added   { background: #f0fdf4; }
+[data-theme="light"] .diff-row--removed { background: #fef2f2; }
+[data-theme="light"] .diff-row--changed { background: #fffbeb; }
+[data-theme="light"] .chain-cycle-error { background: #fef2f2; border-color: #fca5a5; color: #dc2626; }
+[data-theme="light"] .sim-step__code--ok  { color: #166534; background: #f0fdf4; border-color: #86efac; }
+[data-theme="light"] .sim-step__code--err { color: #dc2626; background: #fef2f2; border-color: #fca5a5; }
+[data-theme="light"] .route-tag--deprecated { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+[data-theme="light"] .deprecated-badge { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+[data-theme="light"] .react-flow__background { background-color: var(--bg-base) !important; }
+
 /* ── Tour ────────────────────────────────────────────────── */
 
 /* Ring highlight on the targeted element */
@@ -2176,6 +2415,141 @@ code {
   flex-shrink: 0;
 }
 .tour-trigger-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Theme toggle button */
+.theme-toggle-btn {
+  font-size: 13px;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.theme-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Deprecated route styles ─────────────────────────── */
+
+.route-row--deprecated { opacity: 0.7; }
+.route-path--deprecated { text-decoration: line-through; text-decoration-color: var(--text-muted); }
+
+.route-tag--deprecated {
+  background: #2b1f0a;
+  border: 1px solid #92400e;
+  color: #fbbf24;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.deprecated-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #92400e;
+  background: #2b1f0a;
+  color: #fbbf24;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+
+/* ── OpenAPI export links ─────────────────────────────── */
+
+.openapi-links {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ── Code snippets ───────────────────────────────────────── */
+
+.code-snippets {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.code-snippets__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.code-snippets__tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.code-snippet-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.1s;
+  letter-spacing: 0.2px;
+}
+
+.code-snippet-tab:hover { color: var(--text-secondary); }
+
+.code-snippet-tab--active {
+  background: var(--bg-elevated);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.code-snippet-copy {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hover);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.12s;
+  letter-spacing: 0.2px;
+}
+
+.code-snippet-copy:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.code-snippets__body {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  padding: 12px 14px;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.6;
+  max-height: 220px;
+  overflow-y: auto;
+}
 
 /* ── Chain ENV footer ────────────────────────────────────── */
 

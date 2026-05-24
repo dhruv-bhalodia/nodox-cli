@@ -34,6 +34,8 @@ const require = createRequire(import.meta.url)
  * @property {'observed'|'none'} querySchemaConfidence
  * @property {string|null} source - Where the schema was defined
  * @property {string[]|null} tags - route tags from validate()
+ * @property {{summary?: string, description?: string, examples?: object}|null} meta - route metadata from validate()
+ * @property {{type: string, name?: string, in?: string, scopes?: string[], description?: string}|null} auth - auth requirement from validate()
  */
 
 /**
@@ -200,6 +202,8 @@ function getOrCreateSchema(method, path) {
       querySchemaConfidence: 'none',
       source: null,
       tags: null,
+      meta: null,
+      auth: null,
     })
   }
   return routeSchemas.get(key)
@@ -680,6 +684,16 @@ export function onRouteRegistered(method, path, handlers) {
         entry.tags = handler.__nodoxSchema.tags
       }
 
+      // Route metadata (summary, description, examples)
+      if (handler.__nodoxSchema.meta) {
+        entry.meta = handler.__nodoxSchema.meta
+      }
+
+      // Auth requirement
+      if (handler.__nodoxSchema.auth) {
+        entry.auth = handler.__nodoxSchema.auth
+      }
+
       registerSchemaForRoute(method, path, handler.__nodoxSchema)
       return // confirmed — no need for fallback layers
     }
@@ -946,15 +960,47 @@ export function enrichRoutesWithSchemas(routes) {
       }
     }
 
+    // Infer auth type from middleware function names when no explicit auth was declared.
+    // Detects common patterns like `authenticate`, `jwtAuth`, `requireAuth`, etc.
+    if (schema && !schema.auth && route.handlers?.length) {
+      const inferred = _inferAuthFromHandlers(route.handlers)
+      if (inferred) schema.auth = inferred
+    }
+
     return {
       ...route,
       hasValidator: schema?.inputConfidence === 'confirmed' || schema?.inputConfidence === 'inferred',
       schema: schema ?? null,
+      version: _detectVersion(route.path),
       // Exclude raw handler functions from the serialized route — they're only
       // needed for retroactive schema detection and must not be sent over WebSocket.
       handlers: undefined,
     }
   })
+}
+
+function _detectVersion(routePath) {
+  const m = routePath.match(/\/v(\d+)\b/i)
+  return m ? `v${m[1]}` : null
+}
+
+const _AUTH_BEARER_RE = /^(bearer|jwt|jwtauth|verifyjwt|checkjwt|authjwt|jwtmiddleware|verifytoken|checktoken|authtoken)$/i
+const _AUTH_APIKEY_RE = /^(apikey|checkapikey|apikeyauth|apikeymiddleware)$/i
+const _AUTH_BASIC_RE  = /^(basic|basicauth|checkbasic)$/i
+const _AUTH_OAUTH_RE  = /^(oauth|oauth2|checkoauth)$/i
+const _AUTH_GENERIC_RE = /^(authenticate|requireauth|isAuthenticated|ensureAuthenticated|requirelogin|authcheck|checkauth|verifyauth|authmiddleware|protectedroute|needsauth|authorized|authorization)$/i
+
+function _inferAuthFromHandlers(handlers) {
+  for (const fn of handlers) {
+    if (!fn || typeof fn !== 'function') continue
+    const name = (fn.name || '').toLowerCase()
+    if (!name || name === 'anonymous' || name === 'bound ') continue
+    if (_AUTH_APIKEY_RE.test(name)) return { type: 'apiKey', name: 'X-API-Key', in: 'header' }
+    if (_AUTH_BASIC_RE.test(name)) return { type: 'basic' }
+    if (_AUTH_OAUTH_RE.test(name)) return { type: 'oauth2' }
+    if (_AUTH_BEARER_RE.test(name) || _AUTH_GENERIC_RE.test(fn.name || '')) return { type: 'bearer' }
+  }
+  return null
 }
 
 /**

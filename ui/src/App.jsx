@@ -143,10 +143,17 @@ function StatusDot({ status }) {
 }
 
 function RouteRow({ route, isSelected, onClick }) {
+  const isDeprecated = route.schema?.meta?.deprecated === true
   return (
-    <button className={`route-row ${isSelected ? 'route-row--selected' : ''}`} onClick={onClick}>
+    <button className={`route-row ${isSelected ? 'route-row--selected' : ''} ${isDeprecated ? 'route-row--deprecated' : ''}`} onClick={onClick}>
       <MethodBadge method={route.method} />
-      <span className="route-path">{route.path}</span>
+      <span className={`route-path ${isDeprecated ? 'route-path--deprecated' : ''}`}>{route.path}</span>
+      {isDeprecated && (
+        <span className="route-tag route-tag--deprecated" title="This route is deprecated">deprecated</span>
+      )}
+      {route.schema?.auth && (
+        <span className="route-auth-lock" title={`Auth: ${route.schema.auth.type}`}>🔒</span>
+      )}
       {route.schema?.inputConfidence === 'confirmed' && (
         <span className="route-tag route-tag--confirmed" title="Schema confirmed via validate()">✓</span>
       )}
@@ -184,6 +191,24 @@ function EmptyState({ status }) {
       <pre className="empty-state__code">{`app.use(express.json())\napp.use(nodox(app))\n\napp.get('/api/users', handler)`}</pre>
     </div>
   )
+}
+
+// ── Inline markdown renderer ──────────────────────────────────────────────────
+// Handles bold, italic, inline code, and links. No external dependency needed.
+
+function MarkdownText({ text }) {
+  if (!text) return null
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  const html = escaped
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\n/g, '<br>')
+  return <span dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 // ── Environment switcher ──────────────────────────────────────────────────────
@@ -228,12 +253,39 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
   const inputConf      = route.schema?.inputConfidence  ?? 'none'
   const outputConf     = route.schema?.outputConfidence ?? 'none'
 
+  const auth = route.schema?.auth ?? null
+  const meta = route.schema?.meta ?? null
+  const externalDocs = route.schema?.externalDocs ?? null
+
   return (
     <div className="detail-panel">
       {/* Header */}
       <div className="detail-panel__header">
-        <MethodBadge method={route.method} />
-        <span className="detail-panel__path">{route.path}</span>
+        <div className="detail-panel__header-row">
+          <MethodBadge method={route.method} />
+          <span className="detail-panel__path">{route.path}</span>
+          {meta?.deprecated === true && (
+            <span className="deprecated-badge" title="This route is deprecated">deprecated</span>
+          )}
+          {auth && (
+            <span className={`auth-badge auth-badge--${auth.type}`} title={`Auth: ${auth.type}`}>
+              🔒 {auth.type}
+            </span>
+          )}
+        </div>
+        {meta?.summary && (
+          <div className="detail-panel__summary">{meta.summary}</div>
+        )}
+        {meta?.description && (
+          <div className="detail-panel__description"><MarkdownText text={meta.description} /></div>
+        )}
+        {externalDocs?.url && (
+          <div className="detail-panel__external-docs">
+            <a href={externalDocs.url} target="_blank" rel="noopener noreferrer">
+              {externalDocs.description || 'External docs'} ↗
+            </a>
+          </div>
+        )}
       </div>
 
       {/* Middleware chain */}
@@ -267,11 +319,51 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
       {/* Schema tab */}
       {tab === 'Schema' && (
         <div className="detail-panel__section">
+          {/* Auth info block */}
+          {auth && (
+            <div className="auth-info">
+              <div className="auth-info__title">Authentication</div>
+              <div className="auth-info__row">
+                <span className="auth-info__label">Type</span>
+                <span className={`auth-badge auth-badge--${auth.type}`}>🔒 {auth.type}</span>
+              </div>
+              {auth.description && (
+                <div className="auth-info__row">
+                  <span className="auth-info__label">Note</span>
+                  <span className="auth-info__value">{auth.description}</span>
+                </div>
+              )}
+              {auth.type === 'apiKey' && (
+                <div className="auth-info__row">
+                  <span className="auth-info__label">Header</span>
+                  <code>{auth.name || 'X-API-Key'}</code>
+                  <span className="auth-info__label" style={{ marginLeft: 12 }}>In</span>
+                  <code>{auth.in || 'header'}</code>
+                </div>
+              )}
+              {auth.type === 'oauth2' && auth.scopes?.length > 0 && (
+                <div className="auth-info__row">
+                  <span className="auth-info__label">Scopes</span>
+                  <span className="auth-info__value">{auth.scopes.join(', ')}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <SchemaTree
             schema={inputSchema}
             label="Request body"
             confidence={inputConf !== 'none' ? inputConf : undefined}
           />
+
+          {/* Body example */}
+          {meta?.examples?.body && (
+            <div style={{ marginTop: 16 }}>
+              <div className="example-label">Body example</div>
+              <pre className="example-code">{JSON.stringify(meta.examples.body, null, 2)}</pre>
+            </div>
+          )}
+
           {outputByStatus
             ? Object.entries(outputByStatus)
                 .sort(([a], [b]) => Number(a) - Number(b))
@@ -282,6 +374,12 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
                       label={`Response ${status}`}
                       confidence="confirmed"
                     />
+                    {meta?.examples?.responses?.[status] && (
+                      <div style={{ marginTop: 8 }}>
+                        <div className="example-label">Example</div>
+                        <pre className="example-code">{JSON.stringify(meta.examples.responses[status], null, 2)}</pre>
+                      </div>
+                    )}
                   </div>
                 ))
             : outputSchema && (
@@ -291,10 +389,16 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
                     label="Response body"
                     confidence={outputConf !== 'none' ? outputConf : undefined}
                   />
+                  {meta?.examples?.response && (
+                    <div style={{ marginTop: 8 }}>
+                      <div className="example-label">Example</div>
+                      <pre className="example-code">{JSON.stringify(meta.examples.response, null, 2)}</pre>
+                    </div>
+                  )}
                 </div>
               )
           }
-          {!inputSchema && !outputSchema && (
+          {!inputSchema && !outputSchema && !auth && (
             <div className="schema-no-data">
               <p>No schema detected yet.</p>
               <p className="muted">
@@ -324,7 +428,11 @@ export default function App() {
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [filter, setFilter] = useState('')
   const [methodFilter, setMethodFilter] = useState('ALL')
+  const [versionFilter, setVersionFilter] = useState('ALL')
   const [view, setView] = useState('routes') // 'routes' | 'chain'
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('nodox-theme') || 'dark' } catch { return 'dark' }
+  })
   const [baseUrl, setBaseUrl] = useState(() => {
     try { return localStorage.getItem('nodox-base-url') || '' } catch { return '' }
   })
@@ -344,6 +452,17 @@ export default function App() {
     setBaseUrl(url)
     try { localStorage.setItem('nodox-base-url', url) } catch {}
   }
+
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    try { localStorage.setItem('nodox-theme', next) } catch {}
+  }
+
+  // Apply theme to root element
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
 
   function startTour() {
     // Snapshot current state so we can restore it when the tour ends
@@ -370,36 +489,62 @@ export default function App() {
     return ['ALL', ...Array.from(set).sort()]
   }, [routes])
 
+  const versions = useMemo(() => {
+    const set = new Set(routes.map(r => r.version).filter(Boolean))
+    return set.size > 1 ? ['ALL', ...Array.from(set).sort()] : []
+  }, [routes])
+
   const filtered = useMemo(() => routes.filter(r => {
     const matchMethod = methodFilter === 'ALL' || r.method === methodFilter
+    const matchVersion = versionFilter === 'ALL' || r.version === versionFilter
     const matchPath = !filter || r.path.toLowerCase().includes(filter.toLowerCase())
-    return matchMethod && matchPath
-  }), [routes, filter, methodFilter])
+    return matchMethod && matchVersion && matchPath
+  }), [routes, filter, methodFilter, versionFilter])
 
-  // Group routes by tag when any route has tags declared via validate()
+  // Group routes by tag when any route has tags declared via validate().
+  // Fall back to grouping by API version when multiple versions are detected but no tags.
   const groupedRoutes = useMemo(() => {
     const hasAnyTags = filtered.some(r => r.schema?.tags?.length)
-    if (!hasAnyTags) return null
 
-    const groups = new Map()
-    const ungrouped = []
-
-    for (const route of filtered) {
-      const routeTags = route.schema?.tags
-      if (!routeTags?.length) {
-        ungrouped.push(route)
-      } else {
-        for (const tag of routeTags) {
-          if (!groups.has(tag)) groups.set(tag, [])
-          groups.get(tag).push(route)
+    if (hasAnyTags) {
+      const groups = new Map()
+      const ungrouped = []
+      for (const route of filtered) {
+        const routeTags = route.schema?.tags
+        if (!routeTags?.length) {
+          ungrouped.push(route)
+        } else {
+          for (const tag of routeTags) {
+            if (!groups.has(tag)) groups.set(tag, [])
+            groups.get(tag).push(route)
+          }
         }
       }
+      const result = [...groups.entries()].map(([tag, routes]) => ({ tag, routes }))
+      if (ungrouped.length) result.push({ tag: null, routes: ungrouped })
+      return result
     }
 
-    const result = [...groups.entries()].map(([tag, routes]) => ({ tag, routes }))
-    if (ungrouped.length) result.push({ tag: null, routes: ungrouped })
-    return result
-  }, [filtered])
+    // Version-based grouping (only when multiple versions present and not filtered to one)
+    const hasMultipleVersions = versions.length > 1 && versionFilter === 'ALL'
+    if (hasMultipleVersions) {
+      const groups = new Map()
+      const unversioned = []
+      for (const route of filtered) {
+        if (route.version) {
+          if (!groups.has(route.version)) groups.set(route.version, [])
+          groups.get(route.version).push(route)
+        } else {
+          unversioned.push(route)
+        }
+      }
+      const result = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([tag, routes]) => ({ tag, routes }))
+      if (unversioned.length) result.push({ tag: null, routes: unversioned })
+      return result.length > 1 ? result : null
+    }
+
+    return null
+  }, [filtered, versions, versionFilter])
 
   const activeRoute = selectedRoute
     ? routes.find(r => r.method === selectedRoute.method && r.path === selectedRoute.path) ?? null
@@ -430,6 +575,11 @@ export default function App() {
               title="Start tour"
               onClick={startTour}
             >?</button>
+            <button
+              className="theme-toggle-btn"
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              onClick={toggleTheme}
+            >{theme === 'dark' ? '☀' : '◑'}</button>
             <StatusDot status={status} />
           </div>
         </div>
@@ -454,6 +604,19 @@ export default function App() {
                 </button>
               ))}
             </div>
+            {versions.length > 0 && (
+              <div className="version-filters">
+                {versions.map(v => (
+                  <button
+                    key={v}
+                    className={`version-filter-btn ${versionFilter === v ? 'version-filter-btn--active' : ''}`}
+                    onClick={() => setVersionFilter(v)}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="sidebar__count">
@@ -523,15 +686,26 @@ export default function App() {
         <div className="sidebar__footer">
           <div className="sidebar__footer-top">
             <span className="muted">nodox v{version}</span>
-            <a
-              className="openapi-link"
-              href="/__nodox/openapi.json"
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Download OpenAPI 3.1 spec"
-            >
-              OpenAPI ↗
-            </a>
+            <div className="openapi-links">
+              <a
+                className="openapi-link"
+                href="/__nodox/openapi.json"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Download OpenAPI 3.1 JSON spec"
+              >
+                JSON ↗
+              </a>
+              <a
+                className="openapi-link"
+                href="/__nodox/openapi.yaml"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Download OpenAPI 3.1 YAML spec"
+              >
+                YAML ↗
+              </a>
+            </div>
           </div>
           <EnvSwitcher baseUrl={baseUrl} onChange={handleBaseUrlChange} />
         </div>

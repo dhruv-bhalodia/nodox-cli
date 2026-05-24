@@ -73,6 +73,7 @@ export default function nodox(appOrOptions, options = {}) {
     schema = true,
     intercept = true,
     force = false,
+    info,
   } = options
 
   // Production safety guard.
@@ -149,7 +150,11 @@ export default function nodox(appOrOptions, options = {}) {
       `\n  \x1b[36m◆ nodox\x1b[0m  \x1b[2mUI →\x1b[0m \x1b[4;36mhttp://localhost:${port}${uiPath}\x1b[0m`
     )
     const count = routes.length
-    const schemaCount = routes.filter(r => r.hasValidator).length
+    const schemaCount = routes.filter(r =>
+      (r.schema?.inputConfidence && r.schema.inputConfidence !== 'none') ||
+      (r.schema?.outputConfidence && r.schema.outputConfidence !== 'none') ||
+      r.hasValidator
+    ).length
     console.log(
       `  \x1b[2m         ${count} route${count !== 1 ? 's' : ''} discovered` +
       (schemaCount > 0 ? `, ${schemaCount} with schema` : '') + `\x1b[0m\n`
@@ -175,12 +180,15 @@ export default function nodox(appOrOptions, options = {}) {
       const originalListen = theApp.listen
       theApp.listen = function nodoxPatchedListen(...args) {
         const server = originalListen.apply(this, args)
-        server.once('listening', () => {
+        server.once('listening', async () => {
           const addr = server.address()
           const port = typeof addr === 'string' ? addr : addr?.port
-          
-          // Before logging, try to run dry-runs for any routes discovered so far
-          if (schema) runDeferredDryRuns()
+
+          // Await dry-runs so inferred schemas are counted in the startup banner
+          if (schema) await runDeferredDryRuns()
+
+          // Re-enrich after dry-runs so logStartup sees the updated confidence levels
+          if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app))
 
           if (log && port && !portLogged) logStartup(port)
           
@@ -205,7 +213,7 @@ export default function nodox(appOrOptions, options = {}) {
       }
     })
 
-    attachUiRoutes(theApp, { uiPath, getState })
+    attachUiRoutes(theApp, { uiPath, getState, info })
   }
 
   // Early init — only possible when app was passed to nodox()
@@ -285,7 +293,7 @@ export default function nodox(appOrOptions, options = {}) {
 
   // Inline UI handler — only used in the no-early-app path.
   // When app IS provided early, attachUiRoutes registers routes that handle /__nodox.
-  const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath, getState }) : null
+  const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath, getState, info }) : null
 
   return function nodoxMiddleware(req, res, next) {
     // Late init: grab app from req.app on the first request (no-arg path)

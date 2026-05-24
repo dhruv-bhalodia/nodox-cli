@@ -55,25 +55,45 @@ function findUiDir() {
  * @param {object} options
  * @param {string} [options.uiPath='/__nodox']
  * @param {Function} [options.getState] - returns current { routes } state for OpenAPI generation
+ * @param {object} [options.info] - OpenAPI info overrides (title, version, description)
  * @returns {Function} Express-compatible (req, res, next) handler
  */
-export function createUiHandler({ uiPath = '/__nodox', getState } = {}) {
+export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
   const uiDir = findUiDir()
   const assetsPrefix = `${uiPath}/assets`
   const openApiPath = `${uiPath}/openapi.json`
+  const openApiYamlPath = `${uiPath}/openapi.yaml`
+  const statusPath = `${uiPath}/status.json`
 
   return function uiHandler(req, res, next) {
     if (!req.path.startsWith(uiPath)) { return next() }
 
     _applySecurityHeaders(res)
 
-    // OpenAPI spec endpoint
+    // OpenAPI JSON spec endpoint
     if (req.path === openApiPath) {
       const state = typeof getState === 'function' ? getState() : { routes: [] }
-      const spec = buildOpenApiSpec(state.routes, req)
+      const spec = buildOpenApiSpec(state.routes, req, { info })
       res.setHeader('Content-Type', 'application/json')
       res.setHeader('Access-Control-Allow-Origin', '*')
       return res.json(spec)
+    }
+
+    // OpenAPI YAML spec endpoint
+    if (req.path === openApiYamlPath) {
+      const state = typeof getState === 'function' ? getState() : { routes: [] }
+      const spec = buildOpenApiSpec(state.routes, req, { info })
+      res.setHeader('Content-Type', 'application/x-yaml')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      return res.send(_toYaml(spec))
+    }
+
+    // Per-route status endpoint — consumed by `npx nodox status`
+    if (req.path === statusPath) {
+      const state = typeof getState === 'function' ? getState() : { routes: [] }
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      return res.json(_buildStatusPayload(state.routes))
     }
 
     if (!uiDir) {
@@ -106,18 +126,38 @@ export function createUiHandler({ uiPath = '/__nodox', getState } = {}) {
  * @param {object} options
  * @param {string} [options.uiPath='/__nodox'] - URL prefix for the UI
  * @param {Function} [options.getState] - returns current { routes } state for OpenAPI generation
+ * @param {object} [options.info] - OpenAPI info overrides (title, version, description)
  */
-export function attachUiRoutes(app, { uiPath = '/__nodox', getState } = {}) {
+export function attachUiRoutes(app, { uiPath = '/__nodox', getState, info } = {}) {
   const uiDir = findUiDir()
 
-  // OpenAPI spec endpoint — must be registered before the SPA catch-all
+  // OpenAPI JSON spec endpoint — must be registered before the SPA catch-all
   app.get(`${uiPath}/openapi.json`, (req, res) => {
     _applySecurityHeaders(res)
     const state = typeof getState === 'function' ? getState() : { routes: [] }
-    const spec = buildOpenApiSpec(state.routes, req)
+    const spec = buildOpenApiSpec(state.routes, req, { info })
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.json(spec)
+  })
+
+  // OpenAPI YAML spec endpoint
+  app.get(`${uiPath}/openapi.yaml`, (req, res) => {
+    _applySecurityHeaders(res)
+    const state = typeof getState === 'function' ? getState() : { routes: [] }
+    const spec = buildOpenApiSpec(state.routes, req, { info })
+    res.setHeader('Content-Type', 'application/x-yaml')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.send(_toYaml(spec))
+  })
+
+  // Per-route status endpoint — consumed by `npx nodox status`
+  app.get(`${uiPath}/status.json`, (req, res) => {
+    _applySecurityHeaders(res)
+    const state = typeof getState === 'function' ? getState() : { routes: [] }
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.json(_buildStatusPayload(state.routes))
   })
 
   if (!uiDir) {
@@ -270,24 +310,146 @@ function createStaticHandler(dir) {
   }
 }
 
+// ── YAML serializer ──────────────────────────────────────────────────────────
+
+/**
+ * Convert a JSON-compatible value to a YAML string.
+ * Handles OpenAPI spec objects: strings, numbers, booleans, null, arrays, objects.
+ * No anchors, multi-document, or binary — just what the spec needs.
+ */
+function _toYaml(value, indent = 0) {
+  const pad = '  '.repeat(indent)
+  if (value === null || value === undefined) return 'null'
+  if (typeof value === 'boolean') return String(value)
+  if (typeof value === 'number') return isFinite(value) ? String(value) : 'null'
+  if (typeof value === 'string') return _yamlStr(value)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]'
+    return value.map(item => {
+      const rendered = _toYaml(item, indent + 1)
+      const isBlock = typeof item === 'object' && item !== null && !Array.isArray(item) && Object.keys(item).length > 0
+      return isBlock ? `${pad}-\n${rendered}` : `${pad}- ${rendered}`
+    }).join('\n')
+  }
+  const entries = Object.entries(value)
+  if (entries.length === 0) return '{}'
+  return entries.map(([k, v]) => {
+    const key = /^[a-zA-Z0-9_$][a-zA-Z0-9_$/-]*$/.test(k) ? k : `"${k.replace(/"/g, '\\"')}"`
+    if (v === null || v === undefined) return `${pad}${key}: null`
+    if (typeof v === 'object') {
+      const rendered = _toYaml(v, indent + 1)
+      if (rendered === '[]' || rendered === '{}') return `${pad}${key}: ${rendered}`
+      return `${pad}${key}:\n${rendered}`
+    }
+    return `${pad}${key}: ${_toYaml(v, indent + 1)}`
+  }).join('\n')
+}
+
+function _yamlStr(s) {
+  if (s === '') return '""'
+  const needsQuote = /[:#{}[\]|>&*!,'"@`]/.test(s) ||
+    /^(true|false|null|yes|no|on|off|\d)/.test(s) ||
+    s.startsWith(' ') || s.endsWith(' ') || s.includes('\n')
+  return needsQuote ? JSON.stringify(s) : s
+}
+
+// ── Status payload ────────────────────────────────────────────────────────────
+
+/**
+ * Build the payload for /__nodox/status.json — consumed by `npx nodox status`.
+ * Returns per-route confidence levels so the CLI can show a rich coverage report.
+ */
+function _buildStatusPayload(routes) {
+  const items = (routes || [])
+    .filter(r => r.path && !r.path.startsWith('/__nodox'))
+    .map(r => ({
+      method: r.method,
+      path: r.path,
+      inputConfidence: r.schema?.inputConfidence ?? 'none',
+      outputConfidence: r.schema?.outputConfidence ?? 'none',
+      tags: r.schema?.tags ?? null,
+    }))
+  return { routes: items, generatedAt: new Date().toISOString() }
+}
+
 // ── OpenAPI spec generation ───────────────────────────────────────────────────
 
 const _BODY_METHODS = new Set(['post', 'put', 'patch'])
 const _PARAM_RE = /:([a-zA-Z_][a-zA-Z0-9_]*)/g
 
 /**
+ * Derive a PascalCase component name from method + path + suffix.
+ * e.g. POST /api/users/:id → "PostApiUsersByIdBody"
+ */
+function _schemaName(method, path, suffix) {
+  const parts = [method.charAt(0).toUpperCase() + method.slice(1).toLowerCase()]
+  for (const seg of path.split('/').filter(Boolean)) {
+    if (seg.startsWith(':')) {
+      parts.push('By' + seg.charAt(1).toUpperCase() + seg.slice(2))
+    } else {
+      parts.push(seg.charAt(0).toUpperCase() + seg.slice(1).replace(/[^a-zA-Z0-9]/g, ''))
+    }
+  }
+  return parts.join('') + suffix
+}
+
+/** JSON fingerprint with sorted keys for deduplication. Circular-reference safe. */
+function _fingerprint(schema) {
+  try {
+    const seen = new WeakSet()
+    return JSON.stringify(schema, (_, v) => {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        if (seen.has(v)) return '[Circular]'
+        seen.add(v)
+        return Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]]))
+      }
+      return v
+    })
+  } catch { return null }
+}
+
+/** True for schemas worth putting in components (object shapes, arrays with items). */
+function _isComplex(schema) {
+  return schema && typeof schema === 'object' &&
+    (schema.properties || schema.items?.properties || schema.anyOf?.length || schema.oneOf?.length || schema.allOf?.length)
+}
+
+/**
+ * Register a schema in components/schemas and return a $ref, or return the schema inline
+ * if it is too simple to bother registering.
+ */
+function _asRef(schema, proposedName, components, fingerprints) {
+  if (!_isComplex(schema)) return schema
+  const fp = _fingerprint(schema)
+  if (fp && fingerprints.has(fp)) {
+    return { '$ref': `#/components/schemas/${fingerprints.get(fp)}` }
+  }
+  let name = proposedName
+  let counter = 2
+  while (components[name]) { name = proposedName + counter++ }
+  components[name] = schema
+  if (fp) fingerprints.set(fp, name)
+  return { '$ref': `#/components/schemas/${name}` }
+}
+
+/**
  * Build an OpenAPI 3.1.0 spec object from the current route + schema state.
  * @param {object[]} routes - enriched routes from getState()
  * @param {import('http').IncomingMessage} req - used to derive server URL
+ * @param {object} [opts]
+ * @param {object} [opts.info] - overrides for the info block (title, version, description)
  * @returns {object} OpenAPI spec
  */
-function buildOpenApiSpec(routes, req) {
+function buildOpenApiSpec(routes, req, { info } = {}) {
   const host = req?.headers?.host || 'localhost'
   const isHttps = req?.connection?.encrypted ||
     req?.headers?.['x-forwarded-proto'] === 'https'
   const protocol = isHttps ? 'https' : 'http'
 
   const paths = {}
+  const securitySchemes = {}
+  const schemaComponents = {}
+  const schemaFingerprints = new Map()
 
   for (const route of (routes || [])) {
     if (!route.path || route.path.startsWith('/__nodox')) continue
@@ -301,8 +463,18 @@ function buildOpenApiSpec(routes, req) {
     const schema = route.schema
     const operation = {}
 
-    // Tags
-    if (schema?.tags?.length) operation.tags = schema.tags
+    // Tags — explicit tags take precedence; fall back to auto-detected API version
+    if (schema?.tags?.length) {
+      operation.tags = schema.tags
+    } else if (route.version) {
+      operation.tags = [route.version]
+    }
+
+    // Metadata
+    if (schema?.meta?.summary) operation.summary = schema.meta.summary
+    if (schema?.meta?.description) operation.description = schema.meta.description
+    if (schema?.meta?.deprecated === true) operation.deprecated = true
+    if (schema?.externalDocs?.url) operation.externalDocs = schema.externalDocs
 
     // Path parameters — extracted from the original Express path
     const pathParams = []
@@ -325,9 +497,16 @@ function buildOpenApiSpec(routes, req) {
 
     // Request body — POST, PUT, PATCH only
     if (_BODY_METHODS.has(method) && schema?.input) {
+      const bodyRef = _asRef(schema.input,
+        _schemaName(method, route.path, 'Body'),
+        schemaComponents, schemaFingerprints)
+      const bodyContent = { schema: bodyRef }
+      if (schema?.meta?.examples?.body) {
+        bodyContent.examples = { default: { value: schema.meta.examples.body } }
+      }
       operation.requestBody = {
         required: true,
-        content: { 'application/json': { schema: schema.input } },
+        content: { 'application/json': bodyContent },
       }
     }
 
@@ -336,17 +515,31 @@ function buildOpenApiSpec(routes, req) {
 
     if (schema?.outputByStatus) {
       for (const [statusCode, resSchema] of Object.entries(schema.outputByStatus)) {
+        const resRef = _asRef(resSchema,
+          _schemaName(method, route.path, `Response${statusCode}`),
+          schemaComponents, schemaFingerprints)
+        const resContent = { schema: resRef }
+        if (schema?.meta?.examples?.responses?.[statusCode]) {
+          resContent.examples = { default: { value: schema.meta.examples.responses[statusCode] } }
+        }
         responses[statusCode] = {
           description: _httpStatusDescription(Number(statusCode)),
-          content: { 'application/json': { schema: resSchema } },
+          content: { 'application/json': resContent },
         }
       }
     }
 
     if (schema?.output && !responses['200']) {
+      const resRef = _asRef(schema.output,
+        _schemaName(method, route.path, 'Response'),
+        schemaComponents, schemaFingerprints)
+      const resContent = { schema: resRef }
+      if (schema?.meta?.examples?.response) {
+        resContent.examples = { default: { value: schema.meta.examples.response } }
+      }
       responses['200'] = {
         description: 'Success',
-        content: { 'application/json': { schema: schema.output } },
+        content: { 'application/json': resContent },
       }
     }
 
@@ -355,14 +548,75 @@ function buildOpenApiSpec(routes, req) {
     }
 
     operation.responses = responses
+
+    // Auth → security on this operation + collect scheme for components
+    if (schema?.auth) {
+      const schemeResult = _buildSecurityScheme(schema.auth)
+      if (schemeResult) {
+        const [schemeName, schemeObj] = schemeResult
+        securitySchemes[schemeName] = schemeObj
+        const scopes = schema.auth.type === 'oauth2' ? (schema.auth.scopes || []) : []
+        operation.security = [{ [schemeName]: scopes }]
+      }
+    }
+
     paths[openApiPath][method] = operation
   }
 
-  return {
+  const specInfo = {
+    title: info?.title || 'API',
+    version: info?.version || '1.0.0',
+    ...(info?.description ? { description: info.description } : {}),
+    ...(info?.contact ? { contact: info.contact } : {}),
+    ...(info?.license ? { license: info.license } : {}),
+    ...(info?.termsOfService ? { termsOfService: info.termsOfService } : {}),
+  }
+
+  const spec = {
     openapi: '3.1.0',
-    info: { title: 'API', version: '1.0.0' },
+    info: specInfo,
     servers: [{ url: `${protocol}://${host}` }],
     paths,
+  }
+
+  const hasSchemaComponents = Object.keys(schemaComponents).length > 0
+  const hasSecuritySchemes = Object.keys(securitySchemes).length > 0
+  if (hasSchemaComponents || hasSecuritySchemes) {
+    spec.components = {}
+    if (hasSchemaComponents) spec.components.schemas = schemaComponents
+    if (hasSecuritySchemes) spec.components.securitySchemes = securitySchemes
+  }
+
+  return spec
+}
+
+/**
+ * Convert a nodox auth config to an [schemeName, OpenAPI Security Scheme] pair.
+ * @param {{type: string, name?: string, in?: string, scopes?: string[], description?: string}} auth
+ * @returns {[string, object]|null}
+ */
+function _buildSecurityScheme(auth) {
+  const desc = auth.description ? { description: auth.description } : {}
+  switch (auth.type) {
+    case 'bearer':
+      return ['BearerAuth', { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', ...desc }]
+    case 'basic':
+      return ['BasicAuth', { type: 'http', scheme: 'basic', ...desc }]
+    case 'apiKey':
+      return ['ApiKeyAuth', { type: 'apiKey', name: auth.name || 'X-API-Key', in: auth.in || 'header', ...desc }]
+    case 'oauth2':
+      return ['OAuth2Auth', {
+        type: 'oauth2',
+        flows: {
+          implicit: {
+            authorizationUrl: '',
+            scopes: Object.fromEntries((auth.scopes || []).map(s => [s, ''])),
+          },
+        },
+        ...desc,
+      }]
+    default:
+      return null
   }
 }
 
