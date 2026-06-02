@@ -145,7 +145,13 @@ function extractMountPath(layer) {
   // This is the most accurate source and handles all Express versions.
   if (layer._nodoxPath) return layer._nodoxPath
 
-  if (!layer.regexp) return ''
+  // Express 5 dropped the regexp property entirely — it uses a matchers array
+  // instead. The original path is unrecoverable from the closure, so we rely
+  // solely on _nodoxPath (set by app-patcher above). layer.slash plays the
+  // same role as Express 4's regexp.fast_slash: true means mounted at '/'.
+  if (!layer.regexp) {
+    return layer.slash ? '' : ''
+  }
 
   // Express fast-path: exact path stored directly
   if (layer.regexp.fast_slash) return ''

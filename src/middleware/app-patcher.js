@@ -42,8 +42,10 @@ export function patchApp(app, { onRouteRegistered, onUse } = {}) {
 
     // After registration, tag the last added layer in the router stack
     // with the original path string so our extractor can use it.
-    if (app._router?.stack?.length) {
-      const lastLayer = app._router.stack[app._router.stack.length - 1]
+    // Express 4 stores the router at app._router; Express 5 uses app.router.
+    const _stack = (app._router || app.router)?.stack
+    if (_stack?.length) {
+      const lastLayer = _stack[_stack.length - 1]
       const pathArg = typeof args[0] === 'string' ? args[0] : null
       if (pathArg && lastLayer && !lastLayer._nodoxPath) {
         lastLayer._nodoxPath = pathArg

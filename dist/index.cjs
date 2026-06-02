@@ -5075,13 +5075,9 @@ var import_url = require("url");
 var import_module2 = require("module");
 var __dirname = import_path.default.dirname((0, import_url.fileURLToPath)(__importMetaUrl));
 var _require2 = (0, import_module2.createRequire)(__importMetaUrl);
-function _getExpressMajor() {
-  try {
-    const v = _require2("express/package.json").version || "4";
-    return parseInt(v.split(".")[0], 10);
-  } catch {
-    return 4;
-  }
+function _getExpressMajor(app) {
+  if (app && typeof app.lazyrouter !== "function") return 5;
+  return 4;
 }
 function findUiDir() {
   const candidates = [
@@ -5253,7 +5249,7 @@ function _sendAsset(res, filePath) {
   res.sendFile(filePath);
 }
 function _registerCatchAll(app, uiPath, handler) {
-  const major = _getExpressMajor();
+  const major = _getExpressMajor(app);
   if (major >= 5) {
     app.get(uiPath, handler);
     app.get(`${uiPath}/*path`, handler);
