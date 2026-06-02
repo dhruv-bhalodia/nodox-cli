@@ -16,11 +16,12 @@ import { createRequire } from 'module'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const _require = createRequire(import.meta.url)
 
-function _getExpressMajor() {
-  try {
-    const v = _require('express/package.json').version || '4'
-    return parseInt(v.split('.')[0], 10)
-  } catch { return 4 }
+function _getExpressMajor(app) {
+  // Detect from the user's app instance — lazyrouter exists in Express 4, was
+  // removed in Express 5. Using require() here would resolve nodox's own express
+  // dependency, not the user's, so it would always return 4.
+  if (app && typeof app.lazyrouter !== 'function') return 5
+  return 4
 }
 
 /**
@@ -288,7 +289,7 @@ function _sendAsset(res, filePath) {
  * out correctly via the startsWith('/__nodox') check.
  */
 function _registerCatchAll(app, uiPath, handler) {
-  const major = _getExpressMajor()
+  const major = _getExpressMajor(app)
   if (major >= 5) {
     app.get(uiPath, handler)
     app.get(`${uiPath}/*path`, handler)

@@ -4864,9 +4864,11 @@ function extractMountPath(layer) {
   if (match) {
     return "/" + match[1].replace(/\\\//g, "/");
   }
-  const match5 = src.match(/^\^\\\/(.+?)(?:\\\/\?|\/\?)?\$?\//);
-  if (match5) {
-    return "/" + match5[1].replace(/\\\//g, "/");
+  const matchGeneral = src.match(
+    /^\^(?:\\\/|\/)((?:[a-zA-Z0-9\-_.~@%!$&'*+,;=:]+(?:(?:\\\/|\/)[a-zA-Z0-9\-_.~@%!$&'*+,;=:]+)*)?)(?:[^a-zA-Z0-9\-_.~@%!$&'*+,;=:\\/]|$)/
+  );
+  if (matchGeneral?.[1]) {
+    return "/" + matchGeneral[1].replace(/\\\//g, "/");
   }
   return "";
 }
@@ -5967,7 +5969,10 @@ async function dryRunValidator(fn, method = "POST") {
     send: _captureBody,
     status: () => _statusResult
   });
-  const mockNext = () => {
+  const mockNext = (err) => {
+    if (!caughtZodError && Array.isArray(err?.issues) && err.issues.length > 0) {
+      caughtZodError = err;
+    }
   };
   let detectedSchema = null;
   let detectedLibrary = null;
