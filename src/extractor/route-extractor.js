@@ -160,10 +160,15 @@ function extractMountPath(layer) {
     return '/' + match[1].replace(/\\\//g, '/')
   }
 
-  // Express 5 path-to-regexp pattern
-  const match5 = src.match(/^\^\\\/(.+?)(?:\\\/\?|\/\?)?\$?\//)
-  if (match5) {
-    return '/' + match5[1].replace(/\\\//g, '/')
+  // General fallback: extract the leading literal path by consuming only URL-safe
+  // characters. Works for Express 5's path-to-regexp v8 format (e.g. ^\/users(?:\/|$))
+  // and any other format where the literal prefix immediately follows the ^/ anchor.
+  // Stops at the first regex metacharacter that can't appear in a URL path segment.
+  const matchGeneral = src.match(
+    /^\^(?:\\\/|\/)((?:[a-zA-Z0-9\-_.~@%!$&'*+,;=:]+(?:(?:\\\/|\/)[a-zA-Z0-9\-_.~@%!$&'*+,;=:]+)*)?)(?:[^a-zA-Z0-9\-_.~@%!$&'*+,;=:\\/]|$)/
+  )
+  if (matchGeneral?.[1]) {
+    return '/' + matchGeneral[1].replace(/\\\//g, '/')
   }
 
   return ''

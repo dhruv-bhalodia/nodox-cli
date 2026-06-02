@@ -210,7 +210,14 @@ export async function dryRunValidator(fn, method = 'POST') {
     send: _captureBody,
     status: () => _statusResult,
   })
-  const mockNext = () => {}
+  const mockNext = (err) => {
+    // Capture ZodErrors forwarded via next(err) — the most common Express error pattern:
+    // try { schema.parse(req.body) } catch (err) { next(err) }
+    // Without this, the ZodError is swallowed and schema detection fails entirely.
+    if (!caughtZodError && Array.isArray(err?.issues) && err.issues.length > 0) {
+      caughtZodError = err
+    }
+  }
 
   let detectedSchema = null
   let detectedLibrary = null
