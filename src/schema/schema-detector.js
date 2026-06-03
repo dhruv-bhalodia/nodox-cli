@@ -278,9 +278,22 @@ export function initSchemaDetector() {
   if (_detectorInitialized) return
   _detectorInitialized = true
 
-  // Patch schema libraries at startup
+  // Patch schema libraries at startup.
+  // require('zod') resolves from nodox's own bundle location — which may be a
+  // different version than the user's app uses (e.g. nodox bundles Zod v4 but
+  // the user has Zod v3). We try two paths:
+  //   1. require.resolve from process.cwd() — finds the user's installed zod
+  //   2. plain require('zod') — fallback to whatever is resolvable
+  // Either way, patchZodWithRegistry wraps the factory methods and patches the
+  // prototype, so dry-run interception works for the user's schemas.
   try {
-    const zod = require('zod')
+    let zodPath
+    try {
+      zodPath = require.resolve('zod', { paths: [process.cwd()] })
+    } catch {
+      zodPath = 'zod'
+    }
+    const zod = require(zodPath)
     const z = zod?.z || zod?.default?.z || (zod?.object ? zod : zod?.default)
     if (z) {
       patchZodWithRegistry(z)
@@ -888,10 +901,17 @@ function _patchUserZodProtoFromRegistry() {
     while (p && p !== Object.prototype) {
       if (typeof p._parseSync === 'function' && !p.__nodoxZodProtoPatched) {
         p.__nodoxZodProtoPatched = true
-        const orig = p._parseSync
+        const origSync = p._parseSync
         p._parseSync = function nodoxTracked_parseSync(...args) {
           markSchemaDetectedInDryRun(this, 'zod')
-          return orig.apply(this, args)
+          return origSync.apply(this, args)
+        }
+        if (typeof p._parseAsync === 'function') {
+          const origAsync = p._parseAsync
+          p._parseAsync = async function nodoxTracked_parseAsync(...args) {
+            markSchemaDetectedInDryRun(this, 'zod')
+            return origAsync.apply(this, args)
+          }
         }
         _userZodProtoPatchApplied = true
         return

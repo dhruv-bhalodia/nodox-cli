@@ -4738,6 +4738,7 @@ __export(index_exports, {
   validate: () => validate
 });
 module.exports = __toCommonJS(index_exports);
+var import_path3 = __toESM(require("path"), 1);
 
 // src/middleware/app-patcher.js
 var ROUTE_METHODS = ["get", "post", "put", "delete", "del", "patch", "options", "head", "all"];
@@ -6711,7 +6712,13 @@ function initSchemaDetector() {
   if (_detectorInitialized) return;
   _detectorInitialized = true;
   try {
-    const zod = require3("zod");
+    let zodPath;
+    try {
+      zodPath = require3.resolve("zod", { paths: [process.cwd()] });
+    } catch {
+      zodPath = "zod";
+    }
+    const zod = require3(zodPath);
     const z = zod?.z || zod?.default?.z || (zod?.object ? zod : zod?.default);
     if (z) {
       patchZodWithRegistry(z);
@@ -7143,11 +7150,18 @@ function _patchUserZodProtoFromRegistry() {
     while (p && p !== Object.prototype) {
       if (typeof p._parseSync === "function" && !p.__nodoxZodProtoPatched) {
         p.__nodoxZodProtoPatched = true;
-        const orig = p._parseSync;
+        const origSync = p._parseSync;
         p._parseSync = function nodoxTracked_parseSync(...args) {
           markSchemaDetectedInDryRun(this, "zod");
-          return orig.apply(this, args);
+          return origSync.apply(this, args);
         };
+        if (typeof p._parseAsync === "function") {
+          const origAsync = p._parseAsync;
+          p._parseAsync = async function nodoxTracked_parseAsync(...args) {
+            markSchemaDetectedInDryRun(this, "zod");
+            return origAsync.apply(this, args);
+          };
+        }
         _userZodProtoPatchApplied = true;
         return;
       }
@@ -7280,6 +7294,31 @@ function nodox(appOrOptions, options = {}) {
   let appInitDone = false;
   let portLogged = false;
   if (schema) initSchemaDetector();
+  let _userZodEsmPatchPromise = null;
+  function ensureUserZodEsmPatched() {
+    if (_userZodEsmPatchPromise) return _userZodEsmPatchPromise;
+    _userZodEsmPatchPromise = (async () => {
+      try {
+        let zodEsmPath = null;
+        try {
+          const searchPaths = [
+            process.argv[1] ? import_path3.default.dirname(process.argv[1]) : null,
+            process.cwd()
+          ].filter(Boolean);
+          const cjsPath = require.resolve("zod", { paths: searchPaths });
+          zodEsmPath = cjsPath.replace(/index\.cjs$/, "index.js");
+        } catch {
+        }
+        const zodMod = zodEsmPath ? await import(zodEsmPath).catch(() => null) : await import("zod").catch(() => null);
+        if (zodMod) {
+          const z = zodMod?.z || zodMod?.default?.z || zodMod;
+          if (z) patchZodWithRegistry(z);
+        }
+      } catch {
+      }
+    })();
+    return _userZodEsmPatchPromise;
+  }
   const cacheCount = schema ? loadCacheIntoRegistry() : 0;
   function scheduleExtraction() {
     if (extractionTimer) clearTimeout(extractionTimer);
@@ -7342,6 +7381,7 @@ function nodox(appOrOptions, options = {}) {
         server.once("listening", async () => {
           const addr = server.address();
           const port = typeof addr === "string" ? addr : addr?.port;
+          if (schema) await ensureUserZodEsmPatched();
           if (schema) await runDeferredDryRuns();
           if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app));
           if (log && port && !portLogged) logStartup(port);
@@ -7371,6 +7411,7 @@ function nodox(appOrOptions, options = {}) {
     const onListening = async () => {
       const addr = externalServer.address();
       const port = typeof addr === "string" ? addr : addr?.port;
+      if (schema) await ensureUserZodEsmPatched();
       if (schema) await runDeferredDryRuns();
       if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app));
       if (log && port && !portLogged) logStartup(port);
@@ -7388,14 +7429,7 @@ function nodox(appOrOptions, options = {}) {
   }
   setTimeout(async () => {
     if (schema) {
-      try {
-        const zodMod = await import("zod").catch(() => null);
-        if (zodMod) {
-          const z = zodMod?.z || zodMod?.default?.z || zodMod;
-          if (z) patchZodWithRegistry(z);
-        }
-      } catch {
-      }
+      await ensureUserZodEsmPatched();
       runDeferredDryRuns();
     }
     doExtraction();

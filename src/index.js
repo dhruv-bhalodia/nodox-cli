@@ -20,6 +20,7 @@
  *   // UI at http://localhost:3000/__nodox
  */
 
+import _path from 'path'
 import { patchApp } from './middleware/app-patcher.js'
 import { extractRoutes, checkExpressCompatibility } from './extractor/route-extractor.js'
 import { NodoxWebSocketServer } from './websocket/ws-server.js'
@@ -99,6 +100,37 @@ export default function nodox(appOrOptions, options = {}) {
 
   // Layer 1: patch zod/joi at module level (doesn't need app)
   if (schema) initSchemaDetector()
+
+  // Patch the user's ESM Zod prototype so dry-run can intercept all parse()
+  // calls including all-optional schemas. Must run before any runDeferredDryRuns()
+  // call regardless of which startup path is used (app.listen or server option).
+  // Resolves zod from the user's project root (process.argv[1]) so it finds their
+  // actual installed version, not nodox's own bundled copy.
+  let _userZodEsmPatchPromise = null
+  function ensureUserZodEsmPatched() {
+    if (_userZodEsmPatchPromise) return _userZodEsmPatchPromise
+    _userZodEsmPatchPromise = (async () => {
+      try {
+        let zodEsmPath = null
+        try {
+          const searchPaths = [
+            process.argv[1] ? _path.dirname(process.argv[1]) : null,
+            process.cwd(),
+          ].filter(Boolean)
+          const cjsPath = require.resolve('zod', { paths: searchPaths })
+          zodEsmPath = cjsPath.replace(/index\.cjs$/, 'index.js')
+        } catch { /* zod not in user's project */ }
+        const zodMod = zodEsmPath
+          ? await import(zodEsmPath).catch(() => null)
+          : await import('zod').catch(() => null)
+        if (zodMod) {
+          const z = zodMod?.z || zodMod?.default?.z || zodMod
+          if (z) patchZodWithRegistry(z)
+        }
+      } catch {}
+    })()
+    return _userZodEsmPatchPromise
+  }
 
   // Layer 4: load .apicache.json from previous test runs into registry (doesn't need app)
   const cacheCount = schema ? loadCacheIntoRegistry() : 0
@@ -185,7 +217,8 @@ export default function nodox(appOrOptions, options = {}) {
           const addr = server.address()
           const port = typeof addr === 'string' ? addr : addr?.port
 
-          // Await dry-runs so inferred schemas are counted in the startup banner
+          // Patch user's ESM Zod prototype, then run dry-runs
+          if (schema) await ensureUserZodEsmPatched()
           if (schema) await runDeferredDryRuns()
 
           // Re-enrich after dry-runs so logStartup sees the updated confidence levels
@@ -229,6 +262,7 @@ export default function nodox(appOrOptions, options = {}) {
     const onListening = async () => {
       const addr = externalServer.address()
       const port = typeof addr === 'string' ? addr : addr?.port
+      if (schema) await ensureUserZodEsmPatched()
       if (schema) await runDeferredDryRuns()
       if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app))
       if (log && port && !portLogged) logStartup(port)
@@ -248,17 +282,7 @@ export default function nodox(appOrOptions, options = {}) {
   // Deferred startup tick: dry-runs, initial extraction, startup log
   setTimeout(async () => {
     if (schema) {
-      // Async-import to get the ESM module instance and patch its factory methods.
-      // Note: import('zod') resolves relative to nodox's own bundle location, so it
-      // may return a different zod instance than the user's app uses. ESM prototype
-      // patching for the user's zod is handled separately in _patchUserZodProtoFromRegistry.
-      try {
-        const zodMod = await import('zod').catch(() => null)
-        if (zodMod) {
-          const z = zodMod?.z || zodMod?.default?.z || zodMod
-          if (z) patchZodWithRegistry(z)
-        }
-      } catch {}
+      await ensureUserZodEsmPatched()
       runDeferredDryRuns()
     }
     doExtraction()
