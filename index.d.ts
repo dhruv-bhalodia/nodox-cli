@@ -55,6 +55,23 @@ export interface NodoxOptions {
    * in the spec and in external viewers (Scalar, Redocly, Swagger UI, etc.).
    */
   info?: NodoxInfoOptions
+
+  /**
+   * External HTTP server instance. Use this when you create the server manually
+   * with `http.createServer(app)` instead of `app.listen()` — for example when
+   * attaching a WebSocket server to the same port.
+   *
+   * Without this option, nodox cannot detect the port or attach its own WebSocket
+   * because it patches `app.listen()` which is never called in that pattern.
+   *
+   * @example
+   * import { createServer } from 'http'
+   * const app = express()
+   * const httpServer = createServer(app)
+   * app.use(nodox(app, { server: httpServer }))
+   * httpServer.listen(3000)
+   */
+  server?: import('http').Server
 }
 
 // ── validate() ────────────────────────────────────────────────────────────────

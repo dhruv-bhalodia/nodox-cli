@@ -15,7 +15,7 @@
  */
 
 import { looksLikeValidator } from './source-screener.js'
-import { dryRunValidator, registerForDryRun, _schemaRegistryArray } from './dry-runner.js'
+import { dryRunValidator, registerForDryRun, _schemaRegistryArray, markSchemaDetectedInDryRun } from './dry-runner.js'
 import { patchZod, patchJoi, capturedSchemas } from './schema-patcher.js'
 import { toJsonSchema, detectSchemaLibrary, schemaRegistry, registerSchemaForRoute } from './validate.js'
 import { createRequire } from 'module'
@@ -304,6 +304,11 @@ export function initSchemaDetector() {
   } catch { /* yup not installed */ }
 }
 
+// _patchedZInstances must be initialized before initSchemaDetector() runs below,
+// because patchZodWithRegistry() accesses it. Declaring it here (above the call)
+// avoids a TDZ ReferenceError that would silently swallow the startup patch.
+const _patchedZInstances = new WeakSet()
+
 // Patch at module load time so schemas created after `import nodox from 'nodox-cli'`
 // (including module-level const schema = z.object({...})) are registered
 // before the dry-run fires.
@@ -422,22 +427,43 @@ function patchZodProtoForOutputTracking(z) {
     parse: (orig) => function nodoxTrackedParse(...args) {
       const result = orig.apply(this, args)
       tagParsedValue(result, this, 'zod')
+      markSchemaDetectedInDryRun(this, 'zod')
       return result
     },
     safeParse: (orig) => function nodoxTrackedSafeParse(...args) {
       const result = orig.apply(this, args)
-      if (result?.success) tagParsedValue(result.data, this, 'zod')
+      if (result?.success) {
+        tagParsedValue(result.data, this, 'zod')
+        markSchemaDetectedInDryRun(this, 'zod')
+      }
       return result
     },
     parseAsync: (orig) => async function nodoxTrackedParseAsync(...args) {
       const result = await orig.apply(this, args)
       tagParsedValue(result, this, 'zod')
+      markSchemaDetectedInDryRun(this, 'zod')
       return result
     },
     safeParseAsync: (orig) => async function nodoxTrackedSafeParseAsync(...args) {
       const result = await orig.apply(this, args)
-      if (result?.success) tagParsedValue(result.data, this, 'zod')
+      if (result?.success) {
+        tagParsedValue(result.data, this, 'zod')
+        markSchemaDetectedInDryRun(this, 'zod')
+      }
       return result
+    },
+    // _parseSync / _parseAsync are the internal prototype methods that the
+    // per-instance bound parse() functions call. Patching these intercepts ALL
+    // schema parse calls including schemas created before patchZodWithRegistry ran
+    // (ESM module-level schemas). Works for Zod v3.x where parse is a bound
+    // own property that still delegates to _parseSync on the prototype.
+    _parseSync: (orig) => function nodoxTracked_parseSync(...args) {
+      markSchemaDetectedInDryRun(this, 'zod')
+      return orig.apply(this, args)
+    },
+    _parseAsync: (orig) => async function nodoxTracked_parseAsync(...args) {
+      markSchemaDetectedInDryRun(this, 'zod')
+      return orig.apply(this, args)
     },
   }
 
@@ -529,8 +555,6 @@ function patchYupProtoForOutputTracking(yup) {
  *
  * Idempotent per-z instance (guarded by a WeakSet).
  */
-const _patchedZInstances = new WeakSet()
-
 export function patchZodWithRegistry(z) {
   if (!z || _patchedZInstances.has(z)) return
   _patchedZInstances.add(z)
@@ -841,7 +865,44 @@ async function _dryRunRoute(method, path, handlers) {
  * Called once, deferred to after all routes are registered.
  * Async because _dryRunRoute awaits one event-loop tick per handler.
  */
+let _userZodProtoPatchApplied = false
+
+/**
+ * Find the user's actual ZodType prototype by inspecting already-registered
+ * Zod schemas (from validate() calls). This works regardless of which Zod
+ * version or bundle nodox itself uses — the schema instances in the registry
+ * were created by the USER's zod, so their prototype IS the user's ZodType.
+ */
+function _patchUserZodProtoFromRegistry() {
+  if (_userZodProtoPatchApplied) return
+  // schemaRegistry (from validate.js) contains schemas registered via validate().
+  // These are always from the USER's zod, regardless of what version nodox bundles.
+  // _schemaRegistryArray may be empty if patchZodWithRegistry failed at startup.
+  const sources = [
+    ..._schemaRegistryArray.map(e => e.schema),
+    ...[...schemaRegistry.values()].map(e => e?.rawSchema || e).filter(Boolean),
+  ]
+  for (const schema of sources) {
+    if (!schema || typeof schema !== 'object') continue
+    let p = Object.getPrototypeOf(schema)
+    while (p && p !== Object.prototype) {
+      if (typeof p._parseSync === 'function' && !p.__nodoxZodProtoPatched) {
+        p.__nodoxZodProtoPatched = true
+        const orig = p._parseSync
+        p._parseSync = function nodoxTracked_parseSync(...args) {
+          markSchemaDetectedInDryRun(this, 'zod')
+          return orig.apply(this, args)
+        }
+        _userZodProtoPatchApplied = true
+        return
+      }
+      p = Object.getPrototypeOf(p)
+    }
+  }
+}
+
 export async function runDeferredDryRuns() {
+  _patchUserZodProtoFromRegistry()
   for (const { method, path, handlers } of pendingDryRuns) {
     const success = await _dryRunRoute(method, path, handlers)
     if (success) {

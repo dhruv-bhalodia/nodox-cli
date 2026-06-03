@@ -74,6 +74,7 @@ export default function nodox(appOrOptions, options = {}) {
     intercept = true,
     force = false,
     info,
+    server: externalServer = null,
   } = options
 
   // Production safety guard.
@@ -220,12 +221,37 @@ export default function nodox(appOrOptions, options = {}) {
   const wasEarlyInit = !!app
   if (wasEarlyInit) _initWithApp(app)
 
+  // External HTTP server support: nodox(app, { server: httpServer })
+  // Users who call http.createServer(app) + httpServer.listen() bypass the
+  // patched app.listen(), so the port and WebSocket would never be set up.
+  // Hooking into the external server's 'listening' event handles this case.
+  if (externalServer) {
+    const onListening = async () => {
+      const addr = externalServer.address()
+      const port = typeof addr === 'string' ? addr : addr?.port
+      if (schema) await runDeferredDryRuns()
+      if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app))
+      if (log && port && !portLogged) logStartup(port)
+      if (!serverAttached) {
+        serverAttached = true
+        wsServer = new NodoxWebSocketServer({ getState })
+        wsServer.attach(externalServer)
+      }
+    }
+    if (externalServer.listening) {
+      onListening()
+    } else {
+      externalServer.once('listening', onListening)
+    }
+  }
+
   // Deferred startup tick: dry-runs, initial extraction, startup log
   setTimeout(async () => {
     if (schema) {
-      // Async-import Zod/Joi/yup so we get the same ESM module instance the user's
-      // code imports. This is the reliable path for Zod v4 where require() returns
-      // a different object than import(). Fire-and-forget; errors are harmless.
+      // Async-import to get the ESM module instance and patch its factory methods.
+      // Note: import('zod') resolves relative to nodox's own bundle location, so it
+      // may return a different zod instance than the user's app uses. ESM prototype
+      // patching for the user's zod is handled separately in _patchUserZodProtoFromRegistry.
       try {
         const zodMod = await import('zod').catch(() => null)
         if (zodMod) {

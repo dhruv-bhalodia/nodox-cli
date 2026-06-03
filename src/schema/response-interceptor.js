@@ -185,8 +185,12 @@ export function createResponseInterceptor({ onResponseShape, parsedValueToSchema
     res.json = function interceptedJson(body) {
       // Only record if we have a concrete matched route.
       // We prepend req.baseUrl to handle routers mounted with a prefix (e.g. app.use('/api', router)).
+      // Normalize path: collapse double slashes and strip trailing slash so
+      // the key matches the route registry (which uses the same normalization).
+      // Without this, a router mounted at /users with route path / produces
+      // /users/ (trailing slash) which never matches the stored key /users.
       const routePath = req.route
-        ? ((req.baseUrl || '') + req.route.path).replace(/\/+/g, '/')
+        ? ((req.baseUrl || '') + req.route.path).replace(/\/+/g, '/').replace(/\/$/, '') || '/'
         : null
 
       if (routePath && !isWildcardRoute(routePath)) {

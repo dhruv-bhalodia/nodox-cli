@@ -4746,8 +4746,9 @@ function patchApp(app, { onRouteRegistered: onRouteRegistered2, onUse } = {}) {
   originalMethods.use = app.use.bind(app);
   app.use = function patchedUse(...args) {
     const result = originalMethods.use.apply(app, args);
-    if (app._router?.stack?.length) {
-      const lastLayer = app._router.stack[app._router.stack.length - 1];
+    const _stack = (app._router || app.router)?.stack;
+    if (_stack?.length) {
+      const lastLayer = _stack[_stack.length - 1];
       const pathArg = typeof args[0] === "string" ? args[0] : null;
       if (pathArg && lastLayer && !lastLayer._nodoxPath) {
         lastLayer._nodoxPath = pathArg;
@@ -4856,7 +4857,9 @@ function walkStack(stack, prefix, routes) {
 }
 function extractMountPath(layer) {
   if (layer._nodoxPath) return layer._nodoxPath;
-  if (!layer.regexp) return "";
+  if (!layer.regexp) {
+    return layer.slash ? "" : "";
+  }
   if (layer.regexp.fast_slash) return "";
   if (layer.regexp.fast_star) return "*";
   const src = layer.regexp.source;
@@ -5628,7 +5631,7 @@ function createResponseInterceptor({ onResponseShape, parsedValueToSchema: parse
   return function responseInterceptorMiddleware(req, res, next) {
     const originalJson = res.json.bind(res);
     res.json = function interceptedJson(body) {
-      const routePath = req.route ? ((req.baseUrl || "") + req.route.path).replace(/\/+/g, "/") : null;
+      const routePath = req.route ? ((req.baseUrl || "") + req.route.path).replace(/\/+/g, "/").replace(/\/$/, "") || "/" : null;
       if (routePath && !isWildcardRoute(routePath)) {
         const method = req.method?.toUpperCase() ?? "";
         if (typeof onRequestBodyShape === "function" && BODY_METHODS.has(method) && req.body !== null && req.body !== void 0 && typeof req.body === "object" && Object.keys(req.body).length > 0) {
@@ -5855,8 +5858,14 @@ var capturedSchemas = /* @__PURE__ */ new WeakMap();
 var dryRunContext = new import_async_hooks.AsyncLocalStorage();
 var ABORT_ERROR_MESSAGE = "__NODOC_DRY_RUN_ABORT__";
 function isDryRun() {
+  return dryRunContext.getStore()?.active === true;
+}
+function markSchemaDetectedInDryRun(schema, library) {
   const store = dryRunContext.getStore();
-  return store === true;
+  if (store?.active && !store.protoDetectedSchema) {
+    store.protoDetectedSchema = schema;
+    store.protoDetectedLibrary = library;
+  }
 }
 var _sideEffectPatchesApplied = false;
 function applySideEffectPatches() {
@@ -5941,6 +5950,13 @@ async function dryRunValidator(fn, method = "POST") {
     body: {},
     params: {},
     query: {},
+    // Return real empty objects for cookie/session/locals so property access
+    // produces undefined instead of a truthy proxy. Without this, patterns like
+    // `if (!req.cookies?.refresh_token) schema.parse(req.body)` never reach
+    // parse() because the proxy is always truthy.
+    cookies: {},
+    session: {},
+    locals: {},
     headers: {
       "content-type": "application/json",
       "accept": "application/json"
@@ -5973,6 +5989,8 @@ async function dryRunValidator(fn, method = "POST") {
   let detectedSchema = null;
   let detectedLibrary = null;
   let caughtZodError = null;
+  let _protoDetectedSchema = null;
+  let _protoDetectedLibrary = null;
   const patchedSchemas = /* @__PURE__ */ new Map();
   const schemasToWatch = getWatchableSchemas();
   for (const { schema, meta } of schemasToWatch) {
@@ -5985,7 +6003,7 @@ async function dryRunValidator(fn, method = "POST") {
     if (patches) patchedSchemas.set(schema, patches);
   }
   try {
-    await dryRunContext.run(true, async () => {
+    await dryRunContext.run({ active: true, protoDetectedSchema: null, protoDetectedLibrary: null }, async () => {
       const maybePromise = fn(mockReq, mockRes, mockNext);
       if (maybePromise && typeof maybePromise.then === "function") {
         await new Promise((resolve) => {
@@ -6005,6 +6023,9 @@ async function dryRunValidator(fn, method = "POST") {
           );
         });
       }
+      const store = dryRunContext.getStore();
+      _protoDetectedSchema = store?.protoDetectedSchema ?? null;
+      _protoDetectedLibrary = store?.protoDetectedLibrary ?? null;
     });
   } catch (err) {
     if (err.message === ABORT_ERROR_MESSAGE) {
@@ -6028,6 +6049,10 @@ async function dryRunValidator(fn, method = "POST") {
         break;
       }
     }
+  }
+  if (!detectedSchema && _protoDetectedSchema) {
+    detectedSchema = _protoDetectedSchema;
+    detectedLibrary = _protoDetectedLibrary || "zod";
   }
   return {
     schema: detectedSchema,
@@ -6710,6 +6735,7 @@ function initSchemaDetector() {
   } catch {
   }
 }
+var _patchedZInstances = /* @__PURE__ */ new WeakSet();
 initSchemaDetector();
 function tagParsedValue(value, schema, library) {
   if (value === null || value === void 0 || typeof value !== "object") return;
@@ -6791,22 +6817,43 @@ function patchZodProtoForOutputTracking(z) {
     parse: (orig) => function nodoxTrackedParse(...args) {
       const result = orig.apply(this, args);
       tagParsedValue(result, this, "zod");
+      markSchemaDetectedInDryRun(this, "zod");
       return result;
     },
     safeParse: (orig) => function nodoxTrackedSafeParse(...args) {
       const result = orig.apply(this, args);
-      if (result?.success) tagParsedValue(result.data, this, "zod");
+      if (result?.success) {
+        tagParsedValue(result.data, this, "zod");
+        markSchemaDetectedInDryRun(this, "zod");
+      }
       return result;
     },
     parseAsync: (orig) => async function nodoxTrackedParseAsync(...args) {
       const result = await orig.apply(this, args);
       tagParsedValue(result, this, "zod");
+      markSchemaDetectedInDryRun(this, "zod");
       return result;
     },
     safeParseAsync: (orig) => async function nodoxTrackedSafeParseAsync(...args) {
       const result = await orig.apply(this, args);
-      if (result?.success) tagParsedValue(result.data, this, "zod");
+      if (result?.success) {
+        tagParsedValue(result.data, this, "zod");
+        markSchemaDetectedInDryRun(this, "zod");
+      }
       return result;
+    },
+    // _parseSync / _parseAsync are the internal prototype methods that the
+    // per-instance bound parse() functions call. Patching these intercepts ALL
+    // schema parse calls including schemas created before patchZodWithRegistry ran
+    // (ESM module-level schemas). Works for Zod v3.x where parse is a bound
+    // own property that still delegates to _parseSync on the prototype.
+    _parseSync: (orig) => function nodoxTracked_parseSync(...args) {
+      markSchemaDetectedInDryRun(this, "zod");
+      return orig.apply(this, args);
+    },
+    _parseAsync: (orig) => async function nodoxTracked_parseAsync(...args) {
+      markSchemaDetectedInDryRun(this, "zod");
+      return orig.apply(this, args);
     }
   };
   for (const [method, wrap] of Object.entries(handlers)) {
@@ -6874,7 +6921,6 @@ function patchYupProtoForOutputTracking(yup) {
     };
   }
 }
-var _patchedZInstances = /* @__PURE__ */ new WeakSet();
 function patchZodWithRegistry(z) {
   if (!z || _patchedZInstances.has(z)) return;
   _patchedZInstances.add(z);
@@ -7084,7 +7130,33 @@ async function _dryRunRoute(method, path3, handlers) {
   }
   return false;
 }
+var _userZodProtoPatchApplied = false;
+function _patchUserZodProtoFromRegistry() {
+  if (_userZodProtoPatchApplied) return;
+  const sources = [
+    ..._schemaRegistryArray.map((e) => e.schema),
+    ...[...schemaRegistry.values()].map((e) => e?.rawSchema || e).filter(Boolean)
+  ];
+  for (const schema of sources) {
+    if (!schema || typeof schema !== "object") continue;
+    let p = Object.getPrototypeOf(schema);
+    while (p && p !== Object.prototype) {
+      if (typeof p._parseSync === "function" && !p.__nodoxZodProtoPatched) {
+        p.__nodoxZodProtoPatched = true;
+        const orig = p._parseSync;
+        p._parseSync = function nodoxTracked_parseSync(...args) {
+          markSchemaDetectedInDryRun(this, "zod");
+          return orig.apply(this, args);
+        };
+        _userZodProtoPatchApplied = true;
+        return;
+      }
+      p = Object.getPrototypeOf(p);
+    }
+  }
+}
 async function runDeferredDryRuns() {
+  _patchUserZodProtoFromRegistry();
   for (const { method, path: path3, handlers } of pendingDryRuns) {
     const success = await _dryRunRoute(method, path3, handlers);
     if (success) {
@@ -7190,7 +7262,8 @@ function nodox(appOrOptions, options = {}) {
     schema = true,
     intercept = true,
     force = false,
-    info
+    info,
+    server: externalServer = null
   } = options;
   if (process.env.NODE_ENV === "production" && !force) {
     console.warn(
@@ -7294,6 +7367,25 @@ function nodox(appOrOptions, options = {}) {
   }
   const wasEarlyInit = !!app;
   if (wasEarlyInit) _initWithApp(app);
+  if (externalServer) {
+    const onListening = async () => {
+      const addr = externalServer.address();
+      const port = typeof addr === "string" ? addr : addr?.port;
+      if (schema) await runDeferredDryRuns();
+      if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app));
+      if (log && port && !portLogged) logStartup(port);
+      if (!serverAttached) {
+        serverAttached = true;
+        wsServer = new NodoxWebSocketServer({ getState });
+        wsServer.attach(externalServer);
+      }
+    };
+    if (externalServer.listening) {
+      onListening();
+    } else {
+      externalServer.once("listening", onListening);
+    }
+  }
   setTimeout(async () => {
     if (schema) {
       try {

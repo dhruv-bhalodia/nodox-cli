@@ -33,9 +33,23 @@ const dryRunContext = new AsyncLocalStorage()
 const ABORT_ERROR_MESSAGE = '__NODOC_DRY_RUN_ABORT__'
 
 function isDryRun() {
+  return dryRunContext.getStore()?.active === true
+}
+
+/**
+ * Called from the Zod prototype-level parse patch in schema-detector.js.
+ * Records the schema instance that called parse() during a dry-run — covers
+ * ESM module-level schemas that are not in _schemaRegistryArray because the
+ * CJS and ESM z instances are separate objects (different bundles).
+ * @param {object} schema - The Zod schema instance (this inside parse)
+ * @param {string} library
+ */
+export function markSchemaDetectedInDryRun(schema, library) {
   const store = dryRunContext.getStore()
-  // console.log('--- isDryRun check:', store)
-  return store === true
+  if (store?.active && !store.protoDetectedSchema) {
+    store.protoDetectedSchema = schema
+    store.protoDetectedLibrary = library
+  }
 }
 
 /**
@@ -185,6 +199,13 @@ export async function dryRunValidator(fn, method = 'POST') {
     body: {},
     params: {},
     query: {},
+    // Return real empty objects for cookie/session/locals so property access
+    // produces undefined instead of a truthy proxy. Without this, patterns like
+    // `if (!req.cookies?.refresh_token) schema.parse(req.body)` never reach
+    // parse() because the proxy is always truthy.
+    cookies: {},
+    session: {},
+    locals: {},
     headers: {
       'content-type': 'application/json',
       'accept': 'application/json',
@@ -222,6 +243,8 @@ export async function dryRunValidator(fn, method = 'POST') {
   let detectedSchema = null
   let detectedLibrary = null
   let caughtZodError = null
+  let _protoDetectedSchema = null
+  let _protoDetectedLibrary = null
   const patchedSchemas = new Map()
 
   // Temporarily patch every known schema's parse methods to intercept the call.
@@ -239,8 +262,10 @@ export async function dryRunValidator(fn, method = 'POST') {
   }
 
   try {
-    // Wrap handler execution in the dry-run context
-    await dryRunContext.run(true, async () => {
+    // Wrap handler execution in the dry-run context.
+    // Store is an object so proto-level patches can write detected schema back
+    // via markSchemaDetectedInDryRun() while still inside the async context.
+    await dryRunContext.run({ active: true, protoDetectedSchema: null, protoDetectedLibrary: null }, async () => {
       const maybePromise = fn(mockReq, mockRes, mockNext)
 
       if (maybePromise && typeof maybePromise.then === 'function') {
@@ -262,6 +287,12 @@ export async function dryRunValidator(fn, method = 'POST') {
           )
         })
       }
+
+      // Capture proto-detected schema while still inside the async context
+      // (dryRunContext.getStore() returns null outside the run() callback).
+      const store = dryRunContext.getStore()
+      _protoDetectedSchema = store?.protoDetectedSchema ?? null
+      _protoDetectedLibrary = store?.protoDetectedLibrary ?? null
     })
   } catch (err) {
     if (err.message === ABORT_ERROR_MESSAGE) {
@@ -290,6 +321,16 @@ export async function dryRunValidator(fn, method = 'POST') {
         break
       }
     }
+  }
+
+  // Proto-level fallback: covers ESM module-level schemas not in _schemaRegistryArray
+  // (CJS and ESM z are separate bundle instances — patching CJS z.object doesn't
+  // register schemas created with ESM z). The prototype patch in schema-detector.js
+  // intercepts ANY parse call on the ESM ZodType prototype, including all-optional
+  // schemas where parse({}) succeeds and no ZodError is thrown.
+  if (!detectedSchema && _protoDetectedSchema) {
+    detectedSchema = _protoDetectedSchema
+    detectedLibrary = _protoDetectedLibrary || 'zod'
   }
 
   return {
