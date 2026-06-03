@@ -37,9 +37,12 @@ export class NodoxWebSocketServer {
    * @param {import('http').Server} httpServer
    */
   attach(httpServer) {
+    // noServer:true prevents ws from registering its own 'upgrade' listener on
+    // the HTTP server. Without this, ws calls abortHandshake(socket, 400) for
+    // any upgrade request whose path doesn't match '/__nodox_ws', destroying
+    // sockets before the user's own WebSocket server can handle them.
     this.#wss = new WebSocketServer({
-      server: httpServer,
-      path: '/__nodox_ws',
+      noServer: true,
       // Only accept connections from the same host (localhost/127.0.0.1).
       // This blocks cross-origin reads from malicious third-party web pages
       // while still allowing the nodox UI served on the same server to connect.
@@ -54,13 +57,23 @@ export class NodoxWebSocketServer {
           const hostname = url.hostname
           if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true
           if (hostname.endsWith('.localhost')) return true
-          
+
           console.warn(`[nodox] WebSocket connection rejected from origin: ${origin} (server host: ${host})`)
           return false
         } catch {
           return false
         }
       },
+    })
+
+    httpServer.on('upgrade', (req, socket, head) => {
+      const path = req.url.split('?')[0]
+      if (path === '/__nodox_ws') {
+        this.#wss.handleUpgrade(req, socket, head, (ws) => {
+          this.#wss.emit('connection', ws, req)
+        })
+      }
+      // else: leave it for the user's own upgrade listeners
     })
 
     this.#wss.on('connection', (ws) => {

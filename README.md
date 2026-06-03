@@ -425,6 +425,11 @@ app.use(nodox(app, {
   schema:    true,        // enable schema detection pipeline
   intercept: true,        // enable live res.json() interception (Layer 5)
   force:     false,       // allow running in NODE_ENV=production
+  server:    undefined,   // pass your http.Server if using http.createServer() instead of app.listen()
+                          // needed when you attach a WebSocket server to the same port:
+                          //   const httpServer = http.createServer(app)
+                          //   app.use(nodox(app, { server: httpServer }))
+                          //   httpServer.listen(3000)
 
   // OpenAPI spec info — shown in external viewers (Scalar, Redocly, Swagger UI)
   info: {
