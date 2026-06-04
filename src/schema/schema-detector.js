@@ -15,7 +15,7 @@
  */
 
 import { looksLikeValidator } from './source-screener.js'
-import { dryRunValidator, registerForDryRun, _schemaRegistryArray, markSchemaDetectedInDryRun } from './dry-runner.js'
+import { dryRunValidator, registerForDryRun, _schemaRegistryArray, markSchemaDetectedInDryRun, createNullProbeBody } from './dry-runner.js'
 import { patchZod, patchJoi, capturedSchemas } from './schema-patcher.js'
 import { toJsonSchema, detectSchemaLibrary, schemaRegistry, registerSchemaForRoute } from './validate.js'
 import { createRequire } from 'module'
@@ -807,7 +807,10 @@ function _reconstructSchemaFromZodError(error) {
         ? { type: 'string', format: 'date-time' }
         : { type: jsType }
 
-      if (issue.received === 'undefined') required.push(field)
+      // Every field that errors on an empty body {} was missing = required.
+      // Zod v4 dropped the `received` property from issues so we cannot rely on
+      // `issue.received === 'undefined'` — use unconditional push instead.
+      required.push(field)
     }
   }
 
@@ -817,6 +820,64 @@ function _reconstructSchemaFromZodError(error) {
   if (required.length > 0) schema.required = [...new Set(required)]
   // Mark as approximate — optional fields and nested shapes are not visible from errors
   schema.description = '(inferred from validation errors — optional fields may be absent)'
+  return schema
+}
+
+/**
+ * Reconstruct a JSON Schema by merging results from two dry-run passes:
+ *   Pass 1 (empty body `{}`):   only required fields appear in the ZodError
+ *   Pass 2 (null-probe body):   ALL non-nullable fields appear in the ZodError
+ *
+ * Required fields  = those that appeared in the empty-body pass (set membership)
+ * Optional fields  = those that appeared only in the null-probe pass
+ * Nullable fields  = silently absent from the null-probe pass (accepted limitation)
+ *
+ * This handles three cases the single-pass approach could not:
+ *   1. Optional fields invisible to the empty-body ZodError
+ *   2. All-optional schemas where the empty-body run succeeds entirely
+ *   3. Mixed schemas where Zod v4 dropped the `received` field from issues
+ *
+ * @param {object|null} emptyBodyError  - ZodError from safeParse({})
+ * @param {object|null} nullProbeError  - ZodError from safeParse(createNullProbeBody())
+ * @returns {object|null} JSON Schema, or null if nothing could be reconstructed
+ */
+function _reconstructSchemaFromTwoPasses(emptyBodyError, nullProbeError) {
+  if (!nullProbeError || !Array.isArray(nullProbeError.issues) || nullProbeError.issues.length === 0) return null
+
+  // Build the required-field set from Pass 1 (fields that errored on empty body = missing = required)
+  const requiredFields = new Set()
+  for (const issue of emptyBodyError?.issues ?? []) {
+    if (issue.path?.length === 1) requiredFields.add(String(issue.path[0]))
+  }
+
+  const properties = {}
+  const required = []
+
+  for (const issue of nullProbeError.issues) {
+    if (!issue.path || issue.path.length !== 1) continue
+    const field = String(issue.path[0])
+    if (!field) continue
+
+    if (issue.code === 'invalid_type') {
+      const typeMap = {
+        string: 'string', number: 'number', integer: 'integer',
+        boolean: 'boolean', object: 'object', array: 'array',
+        date: 'string', bigint: 'integer', null: 'null',
+        undefined: 'null',
+      }
+      properties[field] = issue.expected === 'date'
+        ? { type: 'string', format: 'date-time' }
+        : { type: typeMap[issue.expected] ?? 'string' }
+
+      if (requiredFields.has(field)) required.push(field)
+    }
+  }
+
+  if (Object.keys(properties).length === 0) return null
+
+  const schema = { type: 'object', properties }
+  if (required.length > 0) schema.required = [...new Set(required)]
+  // No "optional fields may be absent" note — the null probe surfaced all fields
   return schema
 }
 
@@ -837,13 +898,12 @@ async function _dryRunRoute(method, path, handlers) {
   if (existing?.inputConfidence === 'confirmed') return false
 
   for (const handler of handlers) {
+    // Pass 1: empty body — tries schema-instance interception first (CJS schemas in registry).
+    // Also captures ZodError for handlers using schema.parse() without try/catch.
     const result = await dryRunValidator(handler, method)
 
     if (result.schema) {
       const meta = capturedSchemas.get(result.schema)
-      // meta may be null for Zod v4 schemas created before the ESM z instance was patched
-      // (module-level schemas in the user's app). result.library is still set from the
-      // dry-run detection. We can convert directly using the schema instance + library.
       const library = result.library || meta?.type
       if (!library) continue
 
@@ -853,13 +913,34 @@ async function _dryRunRoute(method, path, handlers) {
       const entry = getOrCreateSchema(method, path)
       entry.input = jsonSchema
       entry.inputConfidence = 'inferred'
-      return true // First successful dry-run wins for this route
+      return true // Schema instance intercepted — toJsonSchema gives all fields including optional
     }
 
-    // Fallback: if the handler called schema.parse() without a try/catch,
-    // the ZodError propagated to the dry-runner. Reconstruct an approximate
-    // schema from the validation issues (covers Zod v4 module-level ESM schemas
-    // that weren't registered — we at least get the required field names + types).
+    // Pass 2: null-probe body — runs when Pass 1 did not intercept the schema instance.
+    // This covers ESM Zod schemas (CJS/ESM split means nodox patches the wrong z instance)
+    // and all-optional schemas where safeParse({}) succeeds and produces no errors.
+    //
+    // The null-probe Proxy returns null for every property access and reports all keys as
+    // present (has trap). Zod validates each schema field against null, producing errors for
+    // every non-nullable field — both required and optional alike.
+    //
+    // We then merge:
+    //   required fields  = fields that errored in BOTH passes (or only Pass 1)
+    //   optional fields  = fields that errored ONLY in Pass 2 (absent from {}, fail with null)
+    const nullResult = await dryRunValidator(handler, method, createNullProbeBody())
+
+    if (nullResult.zodError || result.zodError) {
+      const jsonSchema = _reconstructSchemaFromTwoPasses(result.zodError, nullResult.zodError)
+      if (jsonSchema && !existing?.input) {
+        const entry = getOrCreateSchema(method, path)
+        entry.input = jsonSchema
+        entry.inputConfidence = 'inferred'
+        return true
+      }
+    }
+
+    // Both passes produced no errors and no intercepted schema. Last resort: single-pass
+    // ZodError reconstruction (handles schema.parse() without try/catch in the handler).
     if (result.zodError && !existing?.input) {
       const jsonSchema = _reconstructSchemaFromZodError(result.zodError)
       if (jsonSchema) {
@@ -922,6 +1003,19 @@ function _patchUserZodProtoFromRegistry() {
 }
 
 export async function runDeferredDryRuns() {
+  // Patch the ESM z factory methods. Node.js keeps CJS and ESM module caches
+  // separate, so `require('zod')` (used at startup in initSchemaDetector) and
+  // `import { z } from 'zod'` (used by user route files) are different objects.
+  // initSchemaDetector only patched the CJS instance. This async patch picks up
+  // the ESM instance so schemas created with `import { z }` after this point are
+  // registered and their full schema (including optional fields) is available for
+  // toJsonSchema without needing the null-probe fallback.
+  try {
+    const esmMod = await import('zod')
+    const esmZ = esmMod?.z || esmMod?.default?.z || (esmMod?.object ? esmMod : esmMod?.default)
+    if (esmZ) patchZodWithRegistry(esmZ)
+  } catch { /* zod not installed in this project */ }
+
   _patchUserZodProtoFromRegistry()
   for (const { method, path, handlers } of pendingDryRuns) {
     const success = await _dryRunRoute(method, path, handlers)

@@ -6,6 +6,26 @@ nodox follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.8] — 2026-06-05
+
+### Fixed
+
+- **Optional fields now inferred correctly without `validate()` or traffic** — Zod v4 dropped the `received` property from validation issues, causing the dry-run reconstruction to never populate the `required` array. Fixed by removing the broken `received` check.
+- **All-optional Zod schemas now detected** — schemas where every field is `.optional()` caused `safeParse({})` to succeed silently, making the schema invisible to dry-run. A second null-probe pass now surfaces all fields by returning `null` for every property access, triggering type errors for both required and optional fields.
+- **ESM/CJS Zod split** — `import { z } from 'zod'` (ESM) and `require('zod')` (CJS) are separate instances in Node.js. nodox only patched the CJS instance at startup, leaving ESM module-level schemas undetected. The ESM z instance is now also patched asynchronously in `runDeferredDryRuns`.
+- **`http.createServer` + `server.listen()` schemas not showing in UI** — `runDeferredDryRuns()` was fire-and-forgotten in the `setTimeout` fallback path, causing `doExtraction()` to run before dry-runs wrote anything to the registry. Added `await` and a post-dry-run re-enrichment so schemas appear correctly without requiring `{ server }` to be passed.
+- **`bugs` URL in package.json** pointed to the wrong repository (`nodox` instead of `nodox-cli`).
+
+### Changed
+
+- **`server` option description** corrected — previously said "needed when you attach a WebSocket server to the same port" which was wrong. Now accurately describes when to use it and what you gain.
+- **README restructured** — `validate()` full reference, chain builder tutorial, and CLI reference moved to `docs/` to keep the README focused on discovery and quick start.
+- **`docs/` added to published files** so README links to `docs/validate.md`, `docs/chain-builder.md`, and `docs/cli.md` resolve correctly on npmjs.com.
+- **Keywords expanded** for better npm registry searchability.
+- **`.gitignore` updated** with standard entries (`.env`, `*.log`, `.DS_Store`, `coverage/`).
+
+---
+
 ## [1.1.0] — 2026-05-15
 
 ### Added

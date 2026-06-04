@@ -90,7 +90,7 @@ Layers 2–5 run entirely on their own against your existing code — no extra l
 
 `validate()` exists for one specific case: when you want a schema to be *confirmed* rather than detected. It is Layer 1 of 5. If you never use it, the other four layers still run and your routes are still documented.
 
-Wrap a handler with `validate()` to attach a confirmed schema. nodox-cli reads it at Layer 1 and marks those fields as confirmed in the UI. It also validates `req.body` at runtime — returning a structured `400` on failure, or passing the parsed and coerced value to the next handler on success.
+Wrap a handler with `validate()` to attach a confirmed schema — nodox reads it at startup, marks fields as confirmed in the UI, and validates `req.body` at runtime, returning a structured `400` on failure:
 
 ```js
 import { validate } from 'nodox-cli'
@@ -108,215 +108,9 @@ app.post('/users', validate(CreateUserSchema), async (req, res) => {
 })
 ```
 
-`validate()` accepts **Zod**, **Joi**, **yup**, **Valibot**, **TypeBox**, and plain **JSON Schema** objects:
+`validate()` accepts **Zod** (v3 and v4), **Joi**, **yup**, **Valibot**, **TypeBox**, and plain **JSON Schema** objects.
 
-```js
-// Joi
-import Joi from 'joi'
-const LoginSchema = Joi.object({ username: Joi.string().required(), password: Joi.string().required() })
-app.post('/login', validate(LoginSchema), handler)
-```
-
-```js
-// yup
-import * as yup from 'yup'
-const ProductSchema = yup.object({ name: yup.string().required(), price: yup.number().positive().required() })
-app.post('/products', validate(ProductSchema), (req, res) => { res.status(201).json(req.body) })
-```
-
-```js
-// Valibot
-import * as v from 'valibot'
-const CreateUserSchema = v.object({ name: v.string(), email: v.pipe(v.string(), v.email()) })
-app.post('/users', validate(CreateUserSchema), handler)
-```
-
-```js
-// TypeBox — schemas are already JSON Schema, so display and runtime checking both work
-import { Type } from '@sinclair/typebox'
-import { Value } from '@sinclair/typebox/value'
-const ProductSchema = Type.Object({ name: Type.String(), price: Type.Number({ minimum: 0 }) })
-app.post('/products', validate(ProductSchema), handler)
-```
-
-```js
-// Plain JSON Schema — displayed in UI but does not perform runtime validation
-const OrderSchema = {
-  type: 'object',
-  properties: {
-    productId: { type: 'string' },
-    quantity:  { type: 'integer', minimum: 1 },
-  },
-  required: ['productId', 'quantity'],
-}
-app.post('/orders', validate(OrderSchema), (req, res) => { res.status(201).json({ orderId: 'ord_123', ...req.body }) })
-```
-
-**Validation error response format** (Zod/Joi/yup/Valibot/TypeBox — returned automatically on failure):
-
-```json
-{
-  "error": "Validation failed",
-  "details": [
-    { "path": "name",  "message": "Required",       "code": "invalid_type" },
-    { "path": "email", "message": "Invalid email",  "code": "invalid_string" }
-  ]
-}
-```
-
-### RFC 7807 Problem Details format
-
-Pass `problemDetails: true` to switch the validation error response to the [IETF RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) Problem Details format. Useful when your API follows the Problem Details standard for error responses:
-
-```js
-app.post('/users', validate(CreateUserSchema, { problemDetails: true }), handler)
-```
-
-```json
-{
-  "type": "about:blank",
-  "title": "Validation Failed",
-  "status": 400,
-  "detail": "One or more fields failed validation.",
-  "errors": [
-    { "pointer": "/name",  "detail": "Required" },
-    { "pointer": "/email", "detail": "Invalid email" }
-  ]
-}
-```
-
-### Document the response schema
-
-Pass a `response` schema to document what the route returns (UI display only — outgoing responses are not validated):
-
-```js
-const UserResponse = z.object({ id: z.number(), name: z.string(), email: z.string() })
-app.post('/users', validate(CreateUserSchema, { response: UserResponse }), handler)
-```
-
-### Multiple response schemas
-
-Pass a `responses` map to document different schemas per HTTP status code:
-
-```js
-const ErrorResponse = z.object({ error: z.string(), details: z.array(z.any()) })
-
-app.post('/users',
-  validate(CreateUserSchema, {
-    responses: {
-      201: UserResponse,
-      400: ErrorResponse,
-      409: z.object({ error: z.string() }),
-    }
-  }),
-  handler
-)
-```
-
-When `responses` is present it takes precedence over `response` in both the UI and the OpenAPI export. Each value accepts Zod, Joi, yup, or a plain JSON Schema object.
-
-### Tag routes for grouping
-
-Pass `tags` to group routes under named sections in the sidebar and in the OpenAPI export. Routes without tags appear below all groups. A route can belong to multiple groups.
-
-```js
-app.get('/users',  validate(z.object({}), { tags: ['Users'] }), handler)
-app.post('/users', validate(CreateUserSchema, { tags: ['Users'], responses: { 201: UserResponse } }), handler)
-app.post('/login', validate(LoginSchema, { tags: ['Auth'] }), handler)
-
-// Multiple groups
-validate(schema, { tags: ['Users', 'Admin'] })
-```
-
-### Rich metadata (summary, description, examples)
-
-Pass `meta` to add human-readable documentation to a route:
-
-```js
-app.post('/users',
-  validate(CreateUserSchema, {
-    tags: ['Users'],
-    meta: {
-      summary: 'Create a new user',
-      description: 'Creates a user and sends a welcome email. Returns 409 if the email already exists.',
-      examples: {
-        body: { name: 'Alice', email: 'alice@example.com' },
-        responses: {
-          201: { id: 1, name: 'Alice', email: 'alice@example.com' },
-          409: { error: 'Email already in use' },
-        },
-      },
-    },
-    responses: { 201: UserResponse, 409: ErrorResponse },
-  }),
-  handler
-)
-```
-
-- `summary` — shown as a subtitle beneath the route path in the detail panel
-- `description` — longer prose, shown below the summary
-- `examples.body` — pre-fills the Playground body editor when you click **Load example**
-- `examples.responses` — shown as code blocks in the Schema tab next to each status response
-- `examples.response` — shown next to the single-status response when `responses` is not used
-
-### Marking routes as deprecated
-
-Pass `deprecated: true` in `meta` to flag a route. Deprecated routes show a strikethrough and badge in the sidebar and emit `deprecated: true` in the OpenAPI export:
-
-```js
-app.get('/v1/users',
-  validate(z.object({}), { tags: ['Users'], meta: { summary: 'List users (v1 — use /v2/users instead)', deprecated: true } }),
-  handler
-)
-```
-
----
-
-### Auth documentation
-
-Pass `auth` to document the authentication scheme for a route. This shows a lock badge in the sidebar and detail panel, and adds a security scheme to the OpenAPI export:
-
-```js
-// Bearer token (JWT)
-validate(schema, { auth: { type: 'bearer' } })
-
-// API key in header, query, or cookie
-validate(schema, { auth: { type: 'apiKey', name: 'X-API-Key', in: 'header' } })
-validate(schema, { auth: { type: 'apiKey', name: 'api_key', in: 'query' } })
-validate(schema, { auth: { type: 'apiKey', name: 'session', in: 'cookie' } })
-
-// HTTP Basic
-validate(schema, { auth: { type: 'basic' } })
-
-// OAuth2 with scopes
-validate(schema, { auth: { type: 'oauth2', scopes: ['read:users', 'write:users'] } })
-```
-
-All types accept an optional `description` string for the OpenAPI `securitySchemes` block. The `auth` option is documentation-only — it does not add any runtime authentication logic.
-
-### External docs link
-
-Pass `externalDocs` to attach a link to external documentation for a route. Shown in the UI as a clickable link and included as `externalDocs` in the OpenAPI export:
-
-```js
-app.post('/payments',
-  validate(PaymentSchema, {
-    externalDocs: {
-      url: 'https://docs.example.com/payments',
-      description: 'Payment API reference',
-    },
-  }),
-  handler
-)
-```
-
-### Strict mode
-
-Pass `strict: true` to reject any fields not declared in the schema — unknown fields return a `400`:
-
-```js
-app.post('/users', validate(CreateUserSchema, { strict: true }), handler)
-```
+→ **[Full validate() reference — all options, libraries, error formats, tags, auth, examples](docs/validate.md)**
 
 ---
 
@@ -390,29 +184,9 @@ Every field in the UI is marked with a badge showing how nodox got its schema:
 
 The **Chain** tab lets you wire routes together into a multi-step flow and execute them in sequence — without leaving the docs UI.
 
-1. Click **+** next to any route in the sidebar to drop it onto the canvas.
-2. Drag from the right handle of one node to the left handle of another to connect them.
-3. Click **▶ Simulate** → **▶ Run all**. Steps execute in dependency order (topological sort). Use **Clear** to reset outputs while keeping inputs.
+Drop routes onto the canvas, connect them, and use `{{step0.fieldName}}` to pass values from one step's response into the next step's input. No copy-pasting between requests.
 
-### Passing data between steps — `{{stepN.field}}`
-
-Use `{{stepN.field}}` in any input field to splice a value from a previous step's response body. `N` is the zero-based step index, `field` is a dot-separated path into its JSON response:
-
-```
-{{step0.id}}          → top-level field "id" from step 0's response
-{{step0.user.email}}  → nested field
-{{step1.token}}       → field from step 1's response
-{{step0.0.name}}      → first item of an array response, then "name"
-```
-
-**Example flow — create a user, then fetch it:**
-
-| Step | Route | Input |
-|------|-------|-------|
-| 0 | `POST /users` | `{ "name": "Alice", "email": "alice@example.com" }` |
-| 1 | `GET /users/:id` | `:id` → `{{step0.id}}` |
-
-After step 0 responds with `{ "id": 42, "name": "Alice" }`, nodox-cli replaces `{{step0.id}}` with `42` before firing the step 1 request — no copy-pasting required. Interpolation works in path parameters, individual body fields, and the raw JSON body textarea. If a referenced step hasn't run yet, the placeholder is left as-is.
+→ **[Full chain builder guide — syntax, examples, auth flows](docs/chain-builder.md)**
 
 ---
 
@@ -425,8 +199,10 @@ app.use(nodox(app, {
   schema:    true,        // enable schema detection pipeline
   intercept: true,        // enable live res.json() interception (Layer 5)
   force:     false,       // allow running in NODE_ENV=production
-  server:    undefined,   // pass your http.Server if using http.createServer() instead of app.listen()
-                          // needed when you attach a WebSocket server to the same port:
+  server:    undefined,   // pass your http.Server when using http.createServer(app) + server.listen()
+                          // instead of app.listen(). Without it nodox still works correctly but the
+                          // startup log shows "localhost:PORT" until the first request arrives.
+                          // Recommended pattern:
                           //   const httpServer = http.createServer(app)
                           //   app.use(nodox(app, { server: httpServer }))
                           //   httpServer.listen(3000)
@@ -472,84 +248,7 @@ npx nodox snapshot  # save a baseline OpenAPI snapshot for diff
 npx nodox diff      # compare snapshots and report breaking changes
 ```
 
-### `npx nodox status`
-
-Connects to your running server and prints per-route schema coverage with confidence levels:
-
-```bash
-npx nodox status                        # connects to http://localhost:3000 by default
-npx nodox status --url http://localhost:4000   # non-default port
-```
-
-Output example (when server is running):
-
-```
-◆ nodox status
-
-  Server: http://localhost:3000
-  Routes tracked: 6
-
-  Schema coverage:
-
-  GET     /users                         confirmed    (validate)
-  POST    /users                         confirmed    (validate)
-  GET     /users/:id                     inferred     (dry-run)
-  PUT     /users/:id                     observed     (traffic)
-  DELETE  /users/:id                     observed     (traffic)
-  GET     /health                        —
-
-  Coverage: 5/6 routes have schema  (83%)
-    2 confirmed via validate()
-    1 inferred from dry-run
-    2 observed from traffic
-```
-
-If no server is running, `status` falls back to `.apicache.json` and shows cache-only data.
-
-### Breaking change detection
-
-nodox-cli can detect API breaking changes between two snapshots of your OpenAPI spec — useful in CI pipelines to prevent unintentional breaking changes from shipping.
-
-**Step 1 — save a baseline snapshot** (before your changes):
-
-```bash
-npx nodox snapshot
-npx nodox snapshot --url http://localhost:4000  # non-default port
-npx nodox snapshot --out snapshots/v1.json      # custom output path
-```
-
-**Step 2 — diff against a new server** (after your changes):
-
-```bash
-npx nodox diff
-npx nodox diff --url http://localhost:4000
-npx nodox diff --snapshot snapshots/v1.json
-npx nodox diff snapshots/v1.json snapshots/v2.json   # two-file mode
-```
-
-The diff command prints a categorised report and **exits with code 1** if breaking changes are detected:
-
-```
-◆ nodox diff
-
-  Breaking changes (2)
-  ✗  Removed: DELETE /api/v1/users/:id
-  ✗  POST /api/v1/users body: field 'email' type changed from 'string' to 'integer'
-
-  Additions (1)
-  +  Added: POST /api/v2/users
-```
-
-**What counts as breaking:**
-
-| Change | Breaking? |
-|---|---|
-| Route removed | Yes |
-| Required request field removed | Yes |
-| Field type changed | Yes |
-| Route deprecated | No (listed as change) |
-| New route added | No (listed as addition) |
-| Optional field added | No (listed as addition) |
+→ **[Full CLI reference — options, output examples, CI setup](docs/cli.md)**
 
 ---
 
@@ -633,6 +332,12 @@ npm install @sinclair/typebox  # for TypeBox support
 ```
 
 Neither is required. nodox-cli detects them at runtime if installed.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

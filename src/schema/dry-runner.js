@@ -191,12 +191,35 @@ export function createInfiniteProxy(overrides = {}) {
  * @param {string} method - HTTP method (for mock req.method)
  * @returns {Promise<DryRunResult>}
  */
-export async function dryRunValidator(fn, method = 'POST') {
+/**
+ * Create a "null probe" body Proxy used in the second dry-run pass.
+ * Returns null for every string-keyed property access so that schema fields
+ * (both required and optional) fail type validation and appear in the ZodError.
+ * The `has` trap returns true so Zod's `key in input` check treats every key
+ * as present (required for optional-field interception in Zod v4).
+ * Fields that accept null (.nullable()) pass silently and will be missed —
+ * this is an accepted limitation.
+ * @returns {Proxy}
+ */
+export function createNullProbeBody() {
+  return new Proxy({}, {
+    get(_, prop) {
+      if (typeof prop === 'symbol') return undefined
+      if (prop === 'then' || prop === 'catch' || prop === 'finally') return undefined
+      if (prop === 'toJSON' || prop === 'valueOf' || prop === 'toString') return undefined
+      if (prop === 'constructor') return Object
+      return null
+    },
+    has(_, prop) { return typeof prop === 'string' },
+  })
+}
+
+export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefined) {
   applySideEffectPatches()
 
   // Build a mock request that looks enough like a real one for validators to run
   const mockReq = createInfiniteProxy({
-    body: {},
+    body: bodyOverride !== undefined ? bodyOverride : {},
     params: {},
     query: {},
     // Return real empty objects for cookie/session/locals so property access

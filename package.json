@@ -1,6 +1,6 @@
 {
   "name": "nodox-cli",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "Instant interactive API documentation for Express — zero config, zero annotations",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -28,6 +28,7 @@
     "src",
     "ui/dist",
     "dist",
+    "docs",
     "index.d.ts",
     "jest-setup.d.ts",
     "README.md",
@@ -41,12 +42,25 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
+    "nodox",
     "express",
     "api",
     "documentation",
     "swagger",
     "openapi",
-    "developer-tools"
+    "cli",
+    "nodejs",
+    "middleware",
+    "developer-tools",
+    "rest-api",
+    "schema-detection",
+    "auto-documentation",
+    "api-docs",
+    "interactive-docs",
+    "express-middleware",
+    "zod",
+    "joi",
+    "typescript"
   ],
   "author": "Dhruv Bhalodia",
   "license": "MIT",
@@ -56,7 +70,7 @@
   },
   "homepage": "https://github.com/dhruv-bhalodia/nodox-cli#readme",
   "bugs": {
-    "url": "https://github.com/dhruv-bhalodia/nodox/issues"
+    "url": "https://github.com/dhruv-bhalodia/nodox-cli/issues"
   },
   "dependencies": {
     "ws": "^8.18.0",

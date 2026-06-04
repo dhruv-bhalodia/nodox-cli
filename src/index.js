@@ -292,7 +292,11 @@ export default function nodox(appOrOptions, options = {}) {
   setTimeout(async () => {
     if (schema) {
       await ensureUserZodEsmPatched()
-      runDeferredDryRuns()
+      await runDeferredDryRuns()
+      // Re-enrich after dry-runs so the UI sees correct schemas even when the user
+      // uses http.createServer(app) + server.listen() without passing { server }.
+      // The app.listen and externalServer paths already do this in their own handlers.
+      if (app) routes = enrichRoutesWithSchemas(extractRoutes(app))
     }
     doExtraction()
 
