@@ -415,7 +415,7 @@ function patchZodInstanceForOutputTracking(schema) {
  * In Zod v4, ZodType.prototype is empty — per-instance patching (above) is used instead.
  * Idempotent.
  */
-function patchZodProtoForOutputTracking(z) {
+export function patchZodProtoForOutputTracking(z) {
   // Walk up from a sample instance to find the deepest ancestor before
   // Object.prototype that still has parse(). That's ZodType.prototype in Zod v3.
   // In Zod v4, parse is an own property — no ancestor proto will have it.

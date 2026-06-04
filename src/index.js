@@ -37,6 +37,7 @@ import {
   loadCacheIntoRegistry,
   parsedValueToSchema,
   patchZodWithRegistry,
+  patchZodProtoForOutputTracking,
   wasRouteRegistered,
 } from './schema/schema-detector.js'
 import { findCacheFile } from './layer4/cache-reader.js'
@@ -125,7 +126,15 @@ export default function nodox(appOrOptions, options = {}) {
           : await import('zod').catch(() => null)
         if (zodMod) {
           const z = zodMod?.z || zodMod?.default?.z || zodMod
-          if (z) patchZodWithRegistry(z)
+          if (z) {
+            patchZodWithRegistry(z)
+            // Explicitly patch ZodType.prototype even if patchZodWithRegistry
+            // was a no-op (guarded by _patchedZInstances when esmZ === cjsZ).
+            // patchZodProtoForOutputTracking is idempotent via __nodoxZodProtoPatched.
+            // This ensures _parseSync is intercepted for all-optional schemas
+            // on the { server: httpServer } path without requiring a validate() call.
+            patchZodProtoForOutputTracking(z)
+          }
         }
       } catch {}
     })()

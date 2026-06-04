@@ -4950,8 +4950,7 @@ var NodoxWebSocketServer = class {
    */
   attach(httpServer) {
     this.#wss = new import_ws.WebSocketServer({
-      server: httpServer,
-      path: "/__nodox_ws",
+      noServer: true,
       // Only accept connections from the same host (localhost/127.0.0.1).
       // This blocks cross-origin reads from malicious third-party web pages
       // while still allowing the nodox UI served on the same server to connect.
@@ -4969,6 +4968,14 @@ var NodoxWebSocketServer = class {
         } catch {
           return false;
         }
+      }
+    });
+    httpServer.on("upgrade", (req, socket, head) => {
+      const path3 = req.url.split("?")[0];
+      if (path3 === "/__nodox_ws") {
+        this.#wss.handleUpgrade(req, socket, head, (ws) => {
+          this.#wss.emit("connection", ws, req);
+        });
       }
     });
     this.#wss.on("connection", (ws) => {
