@@ -43,6 +43,7 @@
   },
   "keywords": [
     "nodox",
+    "nodox-cli",
     "express",
     "api",
     "documentation",
@@ -60,7 +61,15 @@
     "express-middleware",
     "zod",
     "joi",
-    "typescript"
+    "typescript",
+    "openapi-generator",
+    "swagger-generator",
+    "zero-config",
+    "automatic-swagger",
+    "express-validator",
+    "openapi-3",
+    "swagger-ui",
+    "express-openapi"
   ],
   "author": "Dhruv Bhalodia",
   "license": "MIT",

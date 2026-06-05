@@ -5952,10 +5952,24 @@ function createInfiniteProxy(overrides = {}) {
   };
   return new Proxy(target, handler(target));
 }
-async function dryRunValidator(fn, method = "POST") {
+function createNullProbeBody() {
+  return new Proxy({}, {
+    get(_, prop) {
+      if (typeof prop === "symbol") return void 0;
+      if (prop === "then" || prop === "catch" || prop === "finally") return void 0;
+      if (prop === "toJSON" || prop === "valueOf" || prop === "toString") return void 0;
+      if (prop === "constructor") return Object;
+      return null;
+    },
+    has(_, prop) {
+      return typeof prop === "string";
+    }
+  });
+}
+async function dryRunValidator(fn, method = "POST", bodyOverride = void 0) {
   applySideEffectPatches();
   const mockReq = createInfiniteProxy({
-    body: {},
+    body: bodyOverride !== void 0 ? bodyOverride : {},
     params: {},
     query: {},
     // Return real empty objects for cookie/session/locals so property access
@@ -7107,13 +7121,47 @@ function _reconstructSchemaFromZodError(error) {
       };
       const jsType = typeMap[issue.expected] ?? "string";
       properties[field] = issue.expected === "date" ? { type: "string", format: "date-time" } : { type: jsType };
-      if (issue.received === "undefined") required.push(field);
+      required.push(field);
     }
   }
   if (Object.keys(properties).length === 0) return null;
   const schema = { type: "object", properties };
   if (required.length > 0) schema.required = [...new Set(required)];
   schema.description = "(inferred from validation errors \u2014 optional fields may be absent)";
+  return schema;
+}
+function _reconstructSchemaFromTwoPasses(emptyBodyError, nullProbeError) {
+  if (!nullProbeError || !Array.isArray(nullProbeError.issues) || nullProbeError.issues.length === 0) return null;
+  const requiredFields = /* @__PURE__ */ new Set();
+  for (const issue of emptyBodyError?.issues ?? []) {
+    if (issue.path?.length === 1) requiredFields.add(String(issue.path[0]));
+  }
+  const properties = {};
+  const required = [];
+  for (const issue of nullProbeError.issues) {
+    if (!issue.path || issue.path.length !== 1) continue;
+    const field = String(issue.path[0]);
+    if (!field) continue;
+    if (issue.code === "invalid_type") {
+      const typeMap = {
+        string: "string",
+        number: "number",
+        integer: "integer",
+        boolean: "boolean",
+        object: "object",
+        array: "array",
+        date: "string",
+        bigint: "integer",
+        null: "null",
+        undefined: "null"
+      };
+      properties[field] = issue.expected === "date" ? { type: "string", format: "date-time" } : { type: typeMap[issue.expected] ?? "string" };
+      if (requiredFields.has(field)) required.push(field);
+    }
+  }
+  if (Object.keys(properties).length === 0) return null;
+  const schema = { type: "object", properties };
+  if (required.length > 0) schema.required = [...new Set(required)];
   return schema;
 }
 async function _dryRunRoute(method, path3, handlers) {
@@ -7131,6 +7179,16 @@ async function _dryRunRoute(method, path3, handlers) {
       entry.input = jsonSchema;
       entry.inputConfidence = "inferred";
       return true;
+    }
+    const nullResult = await dryRunValidator(handler, method, createNullProbeBody());
+    if (nullResult.zodError || result.zodError) {
+      const jsonSchema = _reconstructSchemaFromTwoPasses(result.zodError, nullResult.zodError);
+      if (jsonSchema && !existing?.input) {
+        const entry = getOrCreateSchema(method, path3);
+        entry.input = jsonSchema;
+        entry.inputConfidence = "inferred";
+        return true;
+      }
     }
     if (result.zodError && !existing?.input) {
       const jsonSchema = _reconstructSchemaFromZodError(result.zodError);
@@ -7177,6 +7235,12 @@ function _patchUserZodProtoFromRegistry() {
   }
 }
 async function runDeferredDryRuns() {
+  try {
+    const esmMod = await import("zod");
+    const esmZ = esmMod?.z || esmMod?.default?.z || (esmMod?.object ? esmMod : esmMod?.default);
+    if (esmZ) patchZodWithRegistry(esmZ);
+  } catch {
+  }
   _patchUserZodProtoFromRegistry();
   for (const { method, path: path3, handlers } of pendingDryRuns) {
     const success = await _dryRunRoute(method, path3, handlers);
@@ -7319,7 +7383,10 @@ function nodox(appOrOptions, options = {}) {
         const zodMod = zodEsmPath ? await import(zodEsmPath).catch(() => null) : await import("zod").catch(() => null);
         if (zodMod) {
           const z = zodMod?.z || zodMod?.default?.z || zodMod;
-          if (z) patchZodWithRegistry(z);
+          if (z) {
+            patchZodWithRegistry(z);
+            patchZodProtoForOutputTracking(z);
+          }
         }
       } catch {
       }
@@ -7437,7 +7504,8 @@ function nodox(appOrOptions, options = {}) {
   setTimeout(async () => {
     if (schema) {
       await ensureUserZodEsmPatched();
-      runDeferredDryRuns();
+      await runDeferredDryRuns();
+      if (app) routes = enrichRoutesWithSchemas(extractRoutes(app));
     }
     doExtraction();
     if (log) {
