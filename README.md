@@ -26,7 +26,7 @@ nodox-cli is different. Add one line and your existing routes are immediately do
 | Annotate every route? | No | No | Yes (`@swagger` JSDoc on every route) | Yes (class decorators) | No for route listing; `#swagger.*` comments needed for body and response schemas | No (but no Express integration) |
 | Schema without hitting routes? | Yes — automatic, zero annotations | No — needs real traffic | Via manual `@swagger` annotations only | Via manual TypeScript decorators only | Partial — scans `req.body` access patterns; no Zod/Joi/yup detection | No |
 | Live request playground | Yes, built-in | Via Swagger UI | Via Swagger UI add-on | Via Swagger UI add-on | Via Swagger UI (`swagger-ui-express`) | Separate app |
-| Schema from real traffic | Yes (Layer 5) | Yes (only mechanism) | No | No | No | No |
+| Schema from real traffic | Yes (Layer 4) | Yes (only mechanism) | No | No | No | No |
 | Multiple schema detection layers | Yes (5 layers) | No | No | No | No | No |
 | Chain builder / flow simulation | Yes | No | No | No | No | Separate Flows tool |
 | OpenAPI 3.1 export | Yes — `/__nodox/openapi.json` | OpenAPI 3.0 natively (not 3.1); Swagger 2.0 default | Yes (any version you configure) | Yes — 3.1 default since v7 | Static `.json` file; OpenAPI 3.0.0 max (Swagger 2.0 default) | Manual export from Spec Hub |
@@ -58,39 +58,37 @@ You can also call `nodox()` without passing `app` — it detects the Express app
 app.use(nodox())   // app detected from req.app at runtime
 ```
 
-Passing `app` explicitly enables Layer 2 source screening immediately at startup rather than waiting for the first request.
+Passing `app` explicitly enables Layer 1 source screening immediately at startup rather than waiting for the first request.
 
 ---
 
 ## How schema detection works
 
-> **Nothing below requires any code changes.** nodox-cli detects schema from your existing handlers automatically. `validate()` is a purely optional enhancement — skip it entirely and every route is still fully documented.
-
-nodox-cli uses a **5-layer pipeline** to detect request/response schemas. Layers run in priority order — a higher-confidence result is never overwritten by a lower one.
+nodox-cli uses a **5-layer pipeline** to detect request/response schemas. Layers 1–4 run automatically against your existing code — no changes needed.
 
 | Layer | Source | What it does |
 |---|---|---|
-| 1 | `validate()` wrapper | Reads the schema you explicitly attached to a route |
-| 2 | Source-code heuristic scan | Parses route handler source for Zod / Joi / yup / express-validator references |
-| 3 | Dry-run with mock request | Calls the handler with a synthetic request, observes what it reads and validates |
-| 4 | Test suite recording (`.apicache.json`) | Loads shapes recorded from your real test suite |
-| 5 | Live `res.json()` interception | Intercepts actual responses as they happen in development |
+| 1 | Source-code heuristic scan | Parses route handler source for Zod / Joi / yup / express-validator references |
+| 2 | Dry-run with mock request | Calls the handler with a synthetic request, observes what it reads and validates |
+| 3 | Test suite recording (`.apicache.json`) | Loads shapes recorded from your real test suite |
+| 4 | Live `res.json()` interception | Intercepts actual responses as they happen in development |
+| 5 *(optional)* | `validate()` wrapper | Explicitly attach a schema when auto-detection isn't enough — produces a `confirmed` badge and validates `req.body` at runtime |
 
-**express-validator** chains are detected automatically in Layer 2 — no wrapper needed. If your routes use `check()`, `body()`, or `param()` validation chains, nodox-cli extracts field names and detects types directly from the validator names (`isEmail`, `isInt`, `isUUID`, etc.).
+**express-validator** chains are detected automatically in Layer 1 — no wrapper needed. If your routes use `check()`, `body()`, or `param()` validation chains, nodox-cli extracts field names and detects types directly from the validator names (`isEmail`, `isInt`, `isUUID`, etc.).
 
-> **Layer 2 and bundlers/minifiers:** Layer 2 reads handler source code as a string to detect validation patterns. If your dev server runs code through Babel, SWC, esbuild, or `tsc`, the source is mangled and Layer 2 cannot match patterns. In that case use `validate()` (Layer 1) for schema declaration, or rely on Layers 4–5 (test cache + live interception) for schema discovery.
+> **Layer 1 and bundlers/minifiers:** Layer 1 reads handler source code as a string to detect validation patterns. If your dev server runs code through Babel, SWC, esbuild, or `tsc`, the source is mangled and Layer 1 cannot match patterns. Fall back to Layers 3–4 (test cache + live interception), or use `validate()` on that specific route.
 
-Layers 2–5 run entirely on their own against your existing code — no extra lines needed. If a handler has no validation logic at all (just reading `req.body` directly), request body schema will be populated once real traffic flows through Layer 5. Response schema detection is unaffected.
+Layers 1–4 run entirely on their own against your existing code — no extra lines needed. If a handler has no validation logic at all (just reading `req.body` directly), request body schema will be populated once real traffic flows through Layer 4. Response schema detection is unaffected.
 
-> **Layer 3 runs in a sandbox.** The dry-run calls your handler with a mock request but blocks all outgoing network connections, database calls, and filesystem writes — nothing is executed for real.
+> **Layer 2 runs in a sandbox.** The dry-run calls your handler with a mock request but blocks all outgoing network connections, database calls, and filesystem writes — nothing is executed for real.
 
 ---
 
-## Explicit schema with validate() (optional)
+## validate() — when auto-detection isn't enough
 
-`validate()` exists for one specific case: when you want a schema to be *confirmed* rather than detected. It is Layer 1 of 5. If you never use it, the other four layers still run and your routes are still documented.
+`validate()` is Layer 5 — skip it entirely and Layers 1–4 still document every route. Use it on specific routes when you hit one of these cases:
 
-Wrap a handler with `validate()` to attach a confirmed schema — nodox reads it at startup, marks fields as confirmed in the UI, and validates `req.body` at runtime, returning a structured `400` on failure:
+**Bundler/transpiler in use** — Babel, SWC, esbuild, or `tsc` mangle source code so Layer 1 can't read patterns. `validate()` passes the schema object directly, bypassing source scanning entirely.
 
 ```js
 import { validate } from 'nodox-cli'
@@ -103,12 +101,60 @@ const CreateUserSchema = z.object({
 })
 
 app.post('/users', validate(CreateUserSchema), async (req, res) => {
-  const user = await db.createUser(req.body)   // req.body is validated and coerced
-  res.json(user)
+  // req.body is already validated and coerced — safe to use directly
+  const user = await db.createUser(req.body)
+  res.status(201).json(user)
 })
 ```
 
-`validate()` accepts **Zod** (v3 and v4), **Joi**, **yup**, **Valibot**, **TypeBox**, and plain **JSON Schema** objects.
+**Runtime validation needed** — Layers 1–4 only document; they never enforce. `validate()` runs the schema against `req.body` on every real request and returns a structured `400` on failure — no `if (!result.success)` boilerplate needed.
+
+```js
+// without validate() — you handle validation yourself
+app.post('/users', async (req, res) => {
+  const result = CreateUserSchema.safeParse(req.body)
+  if (!result.success) return res.status(400).json({ error: result.error })
+  const user = await db.createUser(result.data)
+  res.status(201).json(user)
+})
+
+// with validate() — middleware handles the 400, handler only runs on valid input
+app.post('/users', validate(CreateUserSchema), async (req, res) => {
+  const user = await db.createUser(req.body)
+  res.status(201).json(user)
+})
+```
+
+**Response schema** — no layer auto-detects what your route returns. Pass a `responses` map keyed by status code.
+
+```js
+const UserResponse = z.object({ id: z.number(), name: z.string(), email: z.string() })
+const ErrorResponse = z.object({ error: z.string(), details: z.array(z.string()) })
+
+app.post('/users', validate(CreateUserSchema, {
+  responses: {
+    201: UserResponse,
+    400: ErrorResponse,
+  },
+}), handler)
+```
+
+**Metadata** — tags, auth scheme, summary, deprecated flag, examples: none of this is detectable from code. `validate()` is the only way to attach it.
+
+```js
+app.post('/users', validate(CreateUserSchema, {
+  tags: ['Users'],
+  auth: { type: 'bearer' },
+  meta: {
+    summary: 'Create a new user',
+    description: 'Creates a user and returns the created record.',
+    deprecated: false,
+    examples: { body: { name: 'Jane Doe', email: 'jane@example.com' } },
+  },
+}), handler)
+```
+
+All four options can be combined in a single `validate()` call. Accepts **Zod** (v3 and v4), **Joi**, **yup**, **Valibot**, **TypeBox**, and plain **JSON Schema**.
 
 → **[Full validate() reference — all options, libraries, error formats, tags, auth, examples](docs/validate.md)**
 
@@ -145,7 +191,7 @@ app.get('/api/v1/users', handler)    // → version: v1, tag: v1
 app.get('/api/v2/users', handler)    // → version: v2, tag: v2
 ```
 
-When a route has explicit `tags` declared via `validate()`, those take precedence over the auto-detected version tag.
+When a route has `tags` declared via `validate()` (Layer 5), those take precedence over the auto-detected version tag.
 
 ---
 
@@ -173,9 +219,9 @@ Every field in the UI is marked with a badge showing how nodox got its schema:
 
 | Badge | How it got there |
 |---|---|
-| **confirmed** | You used `validate()` explicitly |
-| **inferred** | nodox dry-ran your handler or read express-validator chains |
-| **observed** | nodox watched real traffic or loaded from `.apicache.json` |
+| **confirmed** | `validate()` was used on this route |
+| **inferred** | nodox dry-ran your handler or read express-validator chains (Layers 1–2) |
+| **observed** | nodox watched real traffic or loaded from `.apicache.json` (Layers 3–4) |
 | *(none)* | Route has no data yet |
 
 ---
@@ -197,7 +243,7 @@ app.use(nodox(app, {
   uiPath:    '/__nodox',  // URL prefix for the docs UI
   log:       true,        // print startup banner with route count and URL
   schema:    true,        // enable schema detection pipeline
-  intercept: true,        // enable live res.json() interception (Layer 5)
+  intercept: true,        // enable live res.json() interception (Layer 4)
   force:     false,       // allow running in NODE_ENV=production
   server:    undefined,   // pass your http.Server when using http.createServer(app) + server.listen()
                           // instead of app.listen(). Without it nodox still works correctly but the
@@ -260,17 +306,17 @@ npx nodox diff      # compare snapshots and report breaking changes
 app.use(nodox(app))
 ```
 
-**Mode 2 — Selective validation:** zero-config for most routes, `validate()` only where you want confirmed schemas and runtime validation.
+**Mode 2 — Patch specific routes:** let auto-detection handle most routes, drop `validate()` only where you need runtime enforcement or metadata.
 
 ```js
 app.use(nodox(app))
 app.get('/users', handler)                                    // auto-detected
-app.post('/users', validate(CreateUserSchema), handler)       // confirmed + validated
+app.post('/users', validate(CreateUserSchema), handler)       // confirmed + runtime validation
 app.get('/users/:id', handler)                                // auto-detected
-app.delete('/users/:id', validate(IdSchema), handler)         // confirmed + validated
+app.delete('/users/:id', validate(IdSchema), handler)         // confirmed + runtime validation
 ```
 
-**Mode 3 — Full manual control:** disable auto-detection, use `validate()` on every route.
+**Mode 3 — Disable auto-detection:** turn off Layers 1–4 and declare everything manually with `validate()`.
 
 ```js
 app.use(nodox(app, { schema: false, intercept: false }))
