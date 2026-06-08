@@ -292,7 +292,10 @@ npx nodox prune     # clear .apicache.json
 npx nodox status    # print per-route schema coverage (live server or cache fallback)
 npx nodox snapshot  # save a baseline OpenAPI snapshot for diff
 npx nodox diff      # compare snapshots and report breaking changes
+npx nodox export    # export OpenAPI spec as JSON and/or YAML
 ```
+
+`export` options: `--format json|yaml|both` (default: both), `--out <basename>` (default: `openapi`), `--url <url>` (default: `http://localhost:3000`).
 
 → **[Full CLI reference: options, output examples, CI setup](docs/cli.md)**
 

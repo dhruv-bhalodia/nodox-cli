@@ -6,6 +6,7 @@ npx nodox prune     # clear .apicache.json
 npx nodox status    # print per-route schema coverage
 npx nodox snapshot  # save a baseline OpenAPI snapshot
 npx nodox diff      # compare snapshots and report breaking changes
+npx nodox export    # export OpenAPI spec as JSON and/or YAML
 ```
 
 ---
@@ -106,6 +107,36 @@ Example output:
 | Route deprecated | No (listed as change) |
 | New route added | No (listed as addition) |
 | Optional field added | No (listed as addition) |
+
+---
+
+## `npx nodox export`
+
+Fetches the live OpenAPI spec from your running server and writes it to disk as JSON, YAML, or both.
+
+```bash
+npx nodox export                              # writes openapi.json + openapi.yaml
+npx nodox export --format json               # JSON only
+npx nodox export --format yaml               # YAML only
+npx nodox export --out api/spec              # custom basename → api/spec.json + api/spec.yaml
+npx nodox export --url http://localhost:4000 # non-default port
+```
+
+Example output:
+
+```
+◆ nodox export
+
+  Server: http://localhost:3000
+
+  ✓  openapi.json  (12 operations)
+  ✓  openapi.yaml
+
+  Paste either file into Swagger UI, Redocly, Scalar, or any OpenAPI viewer.
+  SDK generators (Speakeasy, Fern) can consume them without extra configuration.
+```
+
+Both files are identical to the live endpoints at `/__nodox/openapi.json` and `/__nodox/openapi.yaml`. Use `export` when you need a static file to commit, upload, or hand to a generator.
 
 ---
 

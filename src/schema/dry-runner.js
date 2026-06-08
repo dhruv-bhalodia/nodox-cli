@@ -80,7 +80,16 @@ function applySideEffectPatches() {
   const origConnect = net.Socket.prototype.connect
   net.Socket.prototype.connect = function(...args) {
     if (isDryRun()) {
-      throw new Error('Network connection blocked during nodox dry-run')
+      // Deliver error asynchronously so pg's event listeners (set up after socket.connect()
+      // returns) are in place when it fires. A synchronous throw skips pg-pool's cleanup
+      // callback, leaving ghost entries in _clients and exhausting the pool for real requests.
+      process.nextTick(() =>
+        this.destroy(Object.assign(
+          new Error('Network connection blocked during nodox dry-run'),
+          { code: 'ENETBLOCK' }
+        ))
+      )
+      return this
     }
     return origConnect.apply(this, args)
   }

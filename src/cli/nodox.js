@@ -51,6 +51,9 @@ function dim(msg)  { console.log(`  ${c.dim}${msg}${c.reset}`) }
     case 'diff':
       await runDiff()
       break
+    case 'export':
+      await runExport()
+      break
     case '--help':
     case '-h':
     case undefined:
@@ -500,6 +503,76 @@ function parseFlag(name) {
   return args[idx + 1] || null
 }
 
+// ── export ────────────────────────────────────────────────────────────────
+
+async function runExport() {
+  log('')
+  log(`  ${c.cyan}${c.bold}◆ nodox export${c.reset}`)
+  log('')
+
+  const urlArg    = parseFlag('--url') || parseFlag('-u')
+  const outArg    = parseFlag('--out') || parseFlag('-o')
+  const formatArg = parseFlag('--format') || parseFlag('-f') || 'both'
+  const serverUrl = urlArg || 'http://localhost:3000'
+  const base      = outArg ? outArg.replace(/\.(json|yaml|yml)$/, '') : 'openapi'
+
+  const wantJson = formatArg === 'json' || formatArg === 'both'
+  const wantYaml = formatArg === 'yaml' || formatArg === 'yml' || formatArg === 'both'
+
+  if (!wantJson && !wantYaml) {
+    err(`Unknown format: ${formatArg}. Use json, yaml, or both.`)
+    log('')
+    process.exit(1)
+  }
+
+  info(`Server: ${c.dim}${serverUrl}${c.reset}`)
+  log('')
+
+  if (wantJson) {
+    const url  = `${serverUrl.replace(/\/$/, '')}/__nodox/openapi.json`
+    const file = path.resolve(process.cwd(), `${base}.json`)
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+      const text = await res.text()
+      fs.writeFileSync(file, text, 'utf8')
+      const count = _countOps(JSON.parse(text))
+      ok(`${c.bold}${path.relative(process.cwd(), file)}${c.reset}  ${c.dim}(${count} operations)${c.reset}`)
+    } catch (e) {
+      err(`JSON export failed: ${e.message}`)
+      dim('Make sure your Express server is running with nodox mounted.')
+      log('')
+      process.exit(1)
+    }
+  }
+
+  if (wantYaml) {
+    const url  = `${serverUrl.replace(/\/$/, '')}/__nodox/openapi.yaml`
+    const file = path.resolve(process.cwd(), `${base}.yaml`)
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+      const text = await res.text()
+      fs.writeFileSync(file, text, 'utf8')
+      ok(`${c.bold}${path.relative(process.cwd(), file)}${c.reset}`)
+    } catch (e) {
+      err(`YAML export failed: ${e.message}`)
+      dim('Make sure your Express server is running with nodox mounted.')
+      log('')
+      process.exit(1)
+    }
+  }
+
+  log('')
+  dim('Paste either file into Swagger UI, Redocly, Scalar, or any OpenAPI viewer.')
+  dim('SDK generators (Speakeasy, Fern) can consume them without extra configuration.')
+  log('')
+}
+
+function _countOps(spec) {
+  return Object.values(spec.paths || {}).reduce((n, ops) => n + Object.keys(ops).length, 0)
+}
+
 // ── help ──────────────────────────────────────────────────────────────────
 
 function printHelp() {
@@ -512,6 +585,7 @@ function printHelp() {
   log(`    ${c.cyan}npx nodox status${c.reset}     Show per-route schema coverage (live server or cache)`)
   log(`    ${c.cyan}npx nodox snapshot${c.reset}   Save a baseline OpenAPI snapshot`)
   log(`    ${c.cyan}npx nodox diff${c.reset}       Compare snapshots and detect breaking changes`)
+  log(`    ${c.cyan}npx nodox export${c.reset}     Export OpenAPI spec as JSON and/or YAML`)
   log('')
   log(`  ${c.bold}status options:${c.reset}`)
   log(`    ${c.dim}--url <url>${c.reset}   Server URL  ${c.dim}(default: http://localhost:3000)${c.reset}`)
@@ -519,6 +593,11 @@ function printHelp() {
   log(`  ${c.bold}snapshot options:${c.reset}`)
   log(`    ${c.dim}--url <url>${c.reset}   Server URL  ${c.dim}(default: http://localhost:3000)${c.reset}`)
   log(`    ${c.dim}--out <file>${c.reset}  Output file ${c.dim}(default: .nodox-snapshot.json)${c.reset}`)
+  log('')
+  log(`  ${c.bold}export options:${c.reset}`)
+  log(`    ${c.dim}--url <url>${c.reset}      Server URL           ${c.dim}(default: http://localhost:3000)${c.reset}`)
+  log(`    ${c.dim}--format <fmt>${c.reset}   json | yaml | both   ${c.dim}(default: both)${c.reset}`)
+  log(`    ${c.dim}--out <base>${c.reset}     Output basename      ${c.dim}(default: openapi → openapi.json / openapi.yaml)${c.reset}`)
   log('')
   log(`  ${c.bold}diff options:${c.reset}`)
   log(`    ${c.dim}npx nodox diff old.json new.json${c.reset}   Compare two snapshot files`)

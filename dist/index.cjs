@@ -5895,7 +5895,13 @@ function applySideEffectPatches() {
   const origConnect = import_net.default.Socket.prototype.connect;
   import_net.default.Socket.prototype.connect = function(...args) {
     if (isDryRun()) {
-      throw new Error("Network connection blocked during nodox dry-run");
+      process.nextTick(() =>
+        this.destroy(Object.assign(
+          new Error("Network connection blocked during nodox dry-run"),
+          { code: "ENETBLOCK" }
+        ))
+      );
+      return this;
     }
     return origConnect.apply(this, args);
   };

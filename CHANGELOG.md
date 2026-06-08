@@ -6,6 +6,26 @@ nodox follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.0] — 2026-06-08
+
+### Fixed
+
+- **Prisma (and any pg-pool consumer) hangs after nodox starts** — routes that guard database calls with `'key' in req.body` reached Prisma during the null-probe dry-run pass introduced in 1.1.8, because the `has` trap returns `true` for all string keys. The `net.Socket.prototype.connect` patch was throwing synchronously, which caused pg-pool to leave a ghost entry in its `_clients` array (push happens before connect, cleanup only runs in the callback). After enough dry-run routes the pool filled up with phantom clients and all real requests waited forever. Fixed by delivering the socket error asynchronously via `process.nextTick(() => socket.destroy(err))` instead of throwing — pg's error-listener chain now fires correctly and the pool cleans up after itself. The null-probe `has` trap and all Zod v4 optional-field detection logic are completely untouched.
+
+### Added
+
+- **`npx nodox export` CLI command** — fetches the live OpenAPI spec from a running server and writes it to disk as JSON, YAML, or both. Supports `--format json|yaml|both` (default: `both`), `--out <basename>` (default: `openapi`), and `--url <url>` (default: `http://localhost:3000`). Outputs operation count and hints for Swagger UI, Redocly, Scalar, and SDK generators.
+
+---
+
+## [1.1.9] — 2026-06-05
+
+### Changed
+
+- Version bump to publish 1.1.8 fixes to npm. No code changes.
+
+---
+
 ## [1.1.8] — 2026-06-05
 
 ### Fixed
