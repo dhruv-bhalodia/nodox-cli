@@ -24,6 +24,15 @@ export class NodoxWebSocketServer {
   /** @type {() => object} */
   #getState
 
+  /** @type {import('http').Server|null} */
+  #httpServer = null
+
+  /** @type {((req: any, socket: any, head: any) => void)|null} */
+  #upgradeHandler = null
+
+  /** @type {Function[]} - the user's own 'upgrade' listeners that we took over */
+  #foreignUpgradeListeners = []
+
   /**
    * @param {object} options
    * @param {Function} options.getState - returns current full state object
@@ -66,15 +75,46 @@ export class NodoxWebSocketServer {
       },
     })
 
-    httpServer.on('upgrade', (req, socket, head) => {
+    // Take over the 'upgrade' event entirely instead of just appending a listener.
+    //
+    // Appending is not safe when the user runs their own WebSocket server in the
+    // default `new WebSocketServer({ server })` mode (graphql-ws, socket.io, plain
+    // ws, etc.). That server registers its OWN 'upgrade' listener which calls
+    // abortHandshake(socket, 400) for every path it doesn't own — including
+    // '/__nodox_ws' — destroying our handshake whether it runs before us (kills the
+    // socket first) or after us (writes a 400 into our already-upgraded socket).
+    //
+    // So we capture whatever 'upgrade' listeners already exist, remove them, and
+    // install a single dispatcher: '/__nodox_ws' is handled ONLY by us; every other
+    // path is forwarded to the original listeners exactly as before. The user's own
+    // WebSocket server keeps working and never sees our path.
+    this.#httpServer = httpServer
+    this.#foreignUpgradeListeners = httpServer.listeners('upgrade')
+    httpServer.removeAllListeners('upgrade')
+
+    this.#upgradeHandler = (req, socket, head) => {
+      // Snapshot the listeners we already own BEFORE absorbing any that were
+      // registered after we took over (e.g. a WS server spun up lazily once the
+      // app is already serving). A late listener is still independently
+      // subscribed for THIS emission, so it runs on its own — we absorb it for
+      // next time but must not also forward to it here, or the socket would be
+      // handled twice.
+      const forwardTargets = this.#foreignUpgradeListeners.slice()
+      this.#absorbLateUpgradeListeners()
+
       const path = req.url.split('?')[0]
       if (path === '/__nodox_ws') {
         this.#wss.handleUpgrade(req, socket, head, (ws) => {
           this.#wss.emit('connection', ws, req)
         })
+        return
       }
-      // else: leave it for the user's own upgrade listeners
-    })
+      // Not ours — hand off to the user's own upgrade listeners untouched.
+      for (const listener of forwardTargets) {
+        listener.call(httpServer, req, socket, head)
+      }
+    }
+    httpServer.on('upgrade', this.#upgradeHandler)
 
     this.#wss.on('connection', (ws) => {
       this.#clients.add(ws)
@@ -111,6 +151,36 @@ export class NodoxWebSocketServer {
     this.#startKeepalive()
 
     return this
+  }
+
+  /**
+   * Self-healing: pull in any 'upgrade' listeners that were registered after we
+   * took over (a WS server created lazily once the app is already serving) and
+   * re-assert ourselves as the sole dispatcher. Without this, a late listener
+   * would sit alongside ours and abort '/__nodox_ws' all over again. Idempotent
+   * and cheap — the common case (no late listeners) is a single length check.
+   *
+   * Known limit: we never prune a captured listener after its WS server closes,
+   * so an in-process teardown+recreate (rare; some HMR setups) leaves a dead
+   * listener we still forward to. Harmless for nodemon-style full restarts.
+   */
+  #absorbLateUpgradeListeners() {
+    if (!this.#httpServer) return
+    const current = this.#httpServer.listeners('upgrade')
+    // Fast path: we're the only listener, nothing was added behind our back.
+    if (current.length === 1 && current[0] === this.#upgradeHandler) return
+
+    let changed = false
+    for (const listener of current) {
+      if (listener !== this.#upgradeHandler && !this.#foreignUpgradeListeners.includes(listener)) {
+        this.#foreignUpgradeListeners.push(listener)
+        changed = true
+      }
+    }
+    if (changed) {
+      this.#httpServer.removeAllListeners('upgrade')
+      this.#httpServer.on('upgrade', this.#upgradeHandler)
+    }
   }
 
   /**
@@ -189,6 +259,18 @@ export class NodoxWebSocketServer {
     }
     this.#clients.clear()
     this.#wss?.close()
+
+    // Relinquish the 'upgrade' event: remove our dispatcher and restore the
+    // user's own listeners so their WebSocket server keeps working after us.
+    if (this.#httpServer && this.#upgradeHandler) {
+      this.#httpServer.removeListener('upgrade', this.#upgradeHandler)
+      for (const listener of this.#foreignUpgradeListeners) {
+        this.#httpServer.on('upgrade', listener)
+      }
+    }
+    this.#upgradeHandler = null
+    this.#foreignUpgradeListeners = []
+    this.#httpServer = null
   }
 
   get clientCount() {

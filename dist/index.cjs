@@ -4937,6 +4937,12 @@ var NodoxWebSocketServer = class {
   #clients = /* @__PURE__ */ new Set();
   /** @type {() => object} */
   #getState;
+  /** @type {import('http').Server|null} */
+  #httpServer = null;
+  /** @type {((req: any, socket: any, head: any) => void)|null} */
+  #upgradeHandler = null;
+  /** @type {Function[]} - the user's own 'upgrade' listeners that we took over */
+  #foreignUpgradeListeners = [];
   /**
    * @param {object} options
    * @param {Function} options.getState - returns current full state object
@@ -4970,14 +4976,24 @@ var NodoxWebSocketServer = class {
         }
       }
     });
-    httpServer.on("upgrade", (req, socket, head) => {
+    this.#httpServer = httpServer;
+    this.#foreignUpgradeListeners = httpServer.listeners("upgrade");
+    httpServer.removeAllListeners("upgrade");
+    this.#upgradeHandler = (req, socket, head) => {
+      const forwardTargets = this.#foreignUpgradeListeners.slice();
+      this.#absorbLateUpgradeListeners();
       const path3 = req.url.split("?")[0];
       if (path3 === "/__nodox_ws") {
         this.#wss.handleUpgrade(req, socket, head, (ws) => {
           this.#wss.emit("connection", ws, req);
         });
+        return;
       }
-    });
+      for (const listener of forwardTargets) {
+        listener.call(httpServer, req, socket, head);
+      }
+    };
+    httpServer.on("upgrade", this.#upgradeHandler);
     this.#wss.on("connection", (ws) => {
       this.#clients.add(ws);
       this.#sendFullSync(ws);
@@ -5001,6 +5017,29 @@ var NodoxWebSocketServer = class {
     });
     this.#startKeepalive();
     return this;
+  }
+  /**
+   * Self-healing: pull in any 'upgrade' listeners that were registered after we
+   * took over (a WS server created lazily once the app is already serving) and
+   * re-assert ourselves as the sole dispatcher. Without this, a late listener
+   * would sit alongside ours and abort '/__nodox_ws' all over again. Idempotent
+   * and cheap — the common case (no late listeners) is a single length check.
+   */
+  #absorbLateUpgradeListeners() {
+    if (!this.#httpServer) return;
+    const current = this.#httpServer.listeners("upgrade");
+    if (current.length === 1 && current[0] === this.#upgradeHandler) return;
+    let changed = false;
+    for (const listener of current) {
+      if (listener !== this.#upgradeHandler && !this.#foreignUpgradeListeners.includes(listener)) {
+        this.#foreignUpgradeListeners.push(listener);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.#httpServer.removeAllListeners("upgrade");
+      this.#httpServer.on("upgrade", this.#upgradeHandler);
+    }
   }
   /**
    * Send full state to one specific client.
@@ -5073,6 +5112,15 @@ var NodoxWebSocketServer = class {
     }
     this.#clients.clear();
     this.#wss?.close();
+    if (this.#httpServer && this.#upgradeHandler) {
+      this.#httpServer.removeListener("upgrade", this.#upgradeHandler);
+      for (const listener of this.#foreignUpgradeListeners) {
+        this.#httpServer.on("upgrade", listener);
+      }
+    }
+    this.#upgradeHandler = null;
+    this.#foreignUpgradeListeners = [];
+    this.#httpServer = null;
   }
   get clientCount() {
     return this.#clients.size;
@@ -5895,8 +5943,8 @@ function applySideEffectPatches() {
   const origConnect = import_net.default.Socket.prototype.connect;
   import_net.default.Socket.prototype.connect = function(...args) {
     if (isDryRun()) {
-      process.nextTick(() =>
-        this.destroy(Object.assign(
+      process.nextTick(
+        () => this.destroy(Object.assign(
           new Error("Network connection blocked during nodox dry-run"),
           { code: "ENETBLOCK" }
         ))

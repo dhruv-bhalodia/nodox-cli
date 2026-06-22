@@ -6,6 +6,14 @@ nodox follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.1] — 2026-06-22
+
+### Fixed
+
+- **UI stuck on "Server restarted — reconnecting…" when the app runs its own WebSocket server** — if the app attaches a WebSocket server to the same HTTP server in the default `new WebSocketServer({ server })` mode (graphql-ws, socket.io, plain `ws`), that server registers its own `'upgrade'` listener which calls `abortHandshake(socket, 400)` on every path it doesn't own — including `/__nodox_ws` — destroying nodox's handshake before it can complete. The v1.1.7 fix only stopped nodox from killing the user's sockets; it never protected nodox's own path from the reverse. nodox now **takes over** the `'upgrade'` event: it captures any existing listeners, routes `/__nodox_ws` to itself, and forwards every other path back to the original listeners untouched. The dispatcher also self-heals — it absorbs any `'upgrade'` listener registered after nodox attached (e.g. a WS server created lazily) so it remains the sole dispatcher. The user's own WebSocket server keeps working unchanged.
+
+---
+
 ## [1.2.0] — 2026-06-08
 
 ### Fixed
