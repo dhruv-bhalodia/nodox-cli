@@ -28,7 +28,6 @@ nodox-cli is different. Add one line and your existing routes are immediately do
 | Live request playground | Yes, built-in | Via Swagger UI | Via Swagger UI add-on | Via Swagger UI add-on | Via Swagger UI (`swagger-ui-express`) |
 | Schema from real traffic | Yes (Layer 4) | Yes (only mechanism) | No | No | No |
 | Multiple schema detection layers | Yes (5 layers) | No | No | No | No |
-| Chain builder / flow simulation | Yes | No | No | No | No |
 | OpenAPI 3.1 export | Yes, at `/__nodox/openapi.json` | OpenAPI 3.0 natively (not 3.1); Swagger 2.0 default | Yes (any version you configure) | Yes, 3.1 default since v7 | Static `.json` file; OpenAPI 3.0.0 max (Swagger 2.0 default) |
 
 ---
