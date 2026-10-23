@@ -20,16 +20,16 @@ Annotation-based tools start empty: you annotate routes, write YAML, run generat
 
 nodox-cli is different. Add one line and your existing routes are immediately documented, with detected schemas, an interactive playground, and live schema updates as real requests flow through.
 
-| | nodox-cli | express-oas-generator | swagger-jsdoc | tsoa | swagger-autogen | Postman |
-|---|---|---|---|---|---|---|
-| Setup | One middleware line | Two middleware placements (before + after routes) | Config file + annotated route files | TypeScript decorators + codegen step | Separate generate script; re-run after route changes; `swagger-ui-express` for UI | Manual collection or CLI generator |
-| Annotate every route? | No | No | Yes (`@swagger` JSDoc on every route) | Yes (class decorators) | No for route listing; `#swagger.*` comments needed for body and response schemas | No (but no Express integration) |
-| Schema without hitting routes? | Yes, automatic, zero annotations | No, needs real traffic | Via manual `@swagger` annotations only | Via manual TypeScript decorators only | Partial: scans `req.body` access patterns; no Zod/Joi/yup detection | No |
-| Live request playground | Yes, built-in | Via Swagger UI | Via Swagger UI add-on | Via Swagger UI add-on | Via Swagger UI (`swagger-ui-express`) | Separate app |
-| Schema from real traffic | Yes (Layer 4) | Yes (only mechanism) | No | No | No | No |
-| Multiple schema detection layers | Yes (5 layers) | No | No | No | No | No |
-| Chain builder / flow simulation | Yes | No | No | No | No | Separate Flows tool |
-| OpenAPI 3.1 export | Yes, at `/__nodox/openapi.json` | OpenAPI 3.0 natively (not 3.1); Swagger 2.0 default | Yes (any version you configure) | Yes, 3.1 default since v7 | Static `.json` file; OpenAPI 3.0.0 max (Swagger 2.0 default) | Manual export from Spec Hub |
+| | nodox-cli | express-oas-generator | swagger-jsdoc | tsoa | swagger-autogen |
+|---|---|---|---|---|---|
+| Setup | One middleware line | Two middleware placements (before + after routes) | Config file + annotated route files | TypeScript decorators + codegen step | Separate generate script; re-run after route changes; `swagger-ui-express` for UI |
+| Annotate every route? | No | No | Yes (`@swagger` JSDoc on every route) | Yes (class decorators) | No for route listing; `#swagger.*` comments needed for body and response schemas |
+| Schema without hitting routes? | Yes, automatic, zero annotations | No, needs real traffic | Via manual `@swagger` annotations only | Via manual TypeScript decorators only | Partial: scans `req.body` access patterns; no Zod/Joi/yup detection |
+| Live request playground | Yes, built-in | Via Swagger UI | Via Swagger UI add-on | Via Swagger UI add-on | Via Swagger UI (`swagger-ui-express`) |
+| Schema from real traffic | Yes (Layer 4) | Yes (only mechanism) | No | No | No |
+| Multiple schema detection layers | Yes (5 layers) | No | No | No | No |
+| Chain builder / flow simulation | Yes | No | No | No | No |
+| OpenAPI 3.1 export | Yes, at `/__nodox/openapi.json` | OpenAPI 3.0 natively (not 3.1); Swagger 2.0 default | Yes (any version you configure) | Yes, 3.1 default since v7 | Static `.json` file; OpenAPI 3.0.0 max (Swagger 2.0 default) |
 
 ---
 
