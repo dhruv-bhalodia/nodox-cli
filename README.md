@@ -124,7 +124,7 @@ app.post('/users', validate(CreateUserSchema), async (req, res) => {
 })
 ```
 
-**Response schema:** no layer auto-detects what your route returns. Pass a `responses` map keyed by status code.
+**Response schema:** no layer auto-detects response schema before traffic. Pass a `responses` map keyed by status code.
 
 ```js
 const UserResponse = z.object({ id: z.number(), name: z.string(), email: z.string() })
