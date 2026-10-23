@@ -1,12 +1,4 @@
 #!/usr/bin/env node
-/**
- * nodox CLI
- *
- * Commands:
- *   npx nodox init    — detect Jest/Vitest, inject setup file into config
- *   npx nodox prune   — wipe .apicache.json and start fresh
- *   npx nodox status  — show current cache stats
- */
 
 import fs from 'fs'
 import path from 'path'
@@ -15,7 +7,6 @@ import { findCacheFile } from '../layer4/cache-reader.js'
 
 const [, , command, ...args] = process.argv
 
-// ── Colours ───────────────────────────────────────────────────────────────
 const c = {
   reset:  '\x1b[0m',
   dim:    '\x1b[2m',
@@ -33,7 +24,6 @@ function warn(msg) { console.log(`  ${c.yellow}!${c.reset}  ${msg}`) }
 function err(msg)  { console.log(`  ${c.red}✗${c.reset}  ${msg}`) }
 function dim(msg)  { console.log(`  ${c.dim}${msg}${c.reset}`) }
 
-// ── Command dispatch ───────────────────────────────────────────────────────
 ;(async () => {
   switch (command) {
     case 'init':
@@ -67,8 +57,6 @@ function dim(msg)  { console.log(`  ${c.dim}${msg}${c.reset}`) }
   }
 })()
 
-// ── init ──────────────────────────────────────────────────────────────────
-
 function runInit() {
   log('')
   log(`  ${c.cyan}${c.bold}◆ nodox init${c.reset}`)
@@ -76,7 +64,6 @@ function runInit() {
 
   const cwd = process.cwd()
 
-  // 1. Detect test runner
   const runner = detectTestRunner(cwd)
   if (!runner) {
     err('No Jest or Vitest config found in the current directory.')
@@ -88,12 +75,8 @@ function runInit() {
 
   info(`Detected test runner: ${c.bold}${runner.name}${c.reset}`)
 
-  // 2. Determine the setup file path to inject
-  // We reference the nodox package by package name so it works whether
-  // nodox is installed globally or as a devDependency.
   const setupEntry = 'nodox-cli/jest-setup'
 
-  // 3. Inject into config
   const result = injectSetupFile(runner.configFile, setupEntry, runner.name)
 
   if (result.alreadyPresent) {
@@ -101,7 +84,6 @@ function runInit() {
     log('')
     dim('Nothing to do. Your test suite is already wired.')
   } else {
-    // Write updated config
     fs.writeFileSync(runner.configFile, result.content, 'utf8')
     ok(`Added ${c.cyan}${setupEntry}${c.reset} to ${c.bold}${path.basename(runner.configFile)}${c.reset}`)
     log('')
@@ -109,7 +91,6 @@ function runInit() {
     dim('and write them to .apicache.json in your project root.')
   }
 
-  // 4. Add .apicache.json to .gitignore if it exists
   ensureGitignore(cwd)
 
   log('')
@@ -117,8 +98,6 @@ function runInit() {
   dim(`  ${runner.testCommand}`)
   log('')
 }
-
-// ── prune ─────────────────────────────────────────────────────────────────
 
 function runPrune() {
   log('')
@@ -135,7 +114,6 @@ function runPrune() {
     return
   }
 
-  // Show what's being wiped
   const cache = readCache(cacheFile)
   const stats = getCacheStats(cache)
   info(`Found cache with ${stats.routeCount} routes (${stats.withOutput} with output schemas)`)
@@ -148,8 +126,6 @@ function runPrune() {
   log('')
 }
 
-// ── status ────────────────────────────────────────────────────────────────
-
 async function runStatus() {
   log('')
   log(`  ${c.cyan}${c.bold}◆ nodox status${c.reset}`)
@@ -159,7 +135,6 @@ async function runStatus() {
   const serverUrl = urlArg || 'http://localhost:3000'
   const statusUrl = `${serverUrl.replace(/\/$/, '')}/__nodox/status.json`
 
-  // Try live server first
   let liveRoutes = null
   try {
     const res = await fetch(statusUrl, { signal: AbortSignal.timeout(2000) })
@@ -167,14 +142,13 @@ async function runStatus() {
       const data = await res.json()
       liveRoutes = data.routes
     }
-  } catch { /* server not running — fall through to cache */ }
+  } catch {  }
 
   if (liveRoutes) {
     _printLiveStatus(liveRoutes, serverUrl)
     return
   }
 
-  // Fall back to cache
   if (urlArg) {
     err(`Could not reach server at ${serverUrl}`)
     dim('Make sure your Express server is running with nodox mounted.')
@@ -267,8 +241,6 @@ function _printCacheStatus() {
   log('')
 }
 
-// ── snapshot ──────────────────────────────────────────────────────────────
-
 async function runSnapshot() {
   log('')
   log(`  ${c.cyan}${c.bold}◆ nodox snapshot${c.reset}`)
@@ -311,8 +283,6 @@ async function runSnapshot() {
   log('')
 }
 
-// ── diff ──────────────────────────────────────────────────────────────────
-
 async function runDiff() {
   log('')
   log(`  ${c.cyan}${c.bold}◆ nodox diff${c.reset}`)
@@ -320,7 +290,6 @@ async function runDiff() {
 
   let oldSpec, newSpec
 
-  // Two-file mode: nodox diff old.json new.json
   if (args.length >= 2 && !args[0].startsWith('-')) {
     const [oldFile, newFile] = args
     try {
@@ -332,7 +301,6 @@ async function runDiff() {
         ?? JSON.parse(fs.readFileSync(path.resolve(process.cwd(), newFile), 'utf8'))
     } catch (e) { err(`Cannot read ${newFile}: ${e.message}`); process.exit(1) }
   } else {
-    // Snapshot-to-server mode: compare saved snapshot against live server
     const snapshotFile = parseFlag('--snapshot') || path.resolve(process.cwd(), '.nodox-snapshot.json')
     const urlArg = parseFlag('--url') || parseFlag('-u')
 
@@ -406,7 +374,6 @@ function _diffSpecs(oldSpec, newSpec) {
   const oldPaths = oldSpec.paths || {}
   const newPaths = newSpec.paths || {}
 
-  // Check for removed or changed routes
   for (const [urlPath, oldOps] of Object.entries(oldPaths)) {
     for (const [method, oldOp] of Object.entries(oldOps)) {
       const newOp = newPaths[urlPath]?.[method]
@@ -416,7 +383,6 @@ function _diffSpecs(oldSpec, newSpec) {
         continue
       }
 
-      // Check request body schema changes
       const oldBody = oldOp.requestBody?.content?.['application/json']?.schema
       const newBody = newOp.requestBody?.content?.['application/json']?.schema
 
@@ -427,14 +393,12 @@ function _diffSpecs(oldSpec, newSpec) {
         breaking.push(`${method.toUpperCase()} ${urlPath}: request body removed`)
       }
 
-      // Check newly deprecated
       if (!oldOp.deprecated && newOp.deprecated) {
         changes.push(`Deprecated: ${method.toUpperCase()} ${urlPath}`)
       }
     }
   }
 
-  // Check for added routes
   for (const [urlPath, newOps] of Object.entries(newPaths)) {
     for (const method of Object.keys(newOps)) {
       if (!oldPaths[urlPath]?.[method]) {
@@ -453,22 +417,16 @@ function _diffSchemas(oldSchema, newSchema, label) {
   const oldRequired = new Set(oldSchema.required || [])
   const newRequired = new Set(newSchema.required || [])
 
-  // Required field removed → breaking (callers that relied on it being present may break)
-  // Actually: removing a field that was required in the *request* schema is non-breaking for
-  // callers (they no longer need to send it). But removing a required *response* field is
-  // breaking. We don't distinguish here, so we flag required field removal as breaking.
   for (const field of oldRequired) {
     if (!newRequired.has(field)) {
       breaking.push(`${label}: required field '${field}' is no longer required`)
     }
   }
 
-  // Field removed entirely → breaking
   for (const field of Object.keys(oldProps)) {
     if (!newProps[field]) {
       breaking.push(`${label}: field '${field}' removed`)
     } else {
-      // Type changed → breaking
       const oldType = _typeStr(oldProps[field])
       const newType = _typeStr(newProps[field])
       if (oldType && newType && oldType !== newType) {
@@ -502,8 +460,6 @@ function parseFlag(name) {
   if (idx === -1) return null
   return args[idx + 1] || null
 }
-
-// ── export ────────────────────────────────────────────────────────────────
 
 async function runExport() {
   log('')
@@ -573,8 +529,6 @@ function _countOps(spec) {
   return Object.values(spec.paths || {}).reduce((n, ops) => n + Object.keys(ops).length, 0)
 }
 
-// ── help ──────────────────────────────────────────────────────────────────
-
 function printHelp() {
   log('')
   log(`  ${c.cyan}${c.bold}◆ nodox${c.reset}`)
@@ -608,14 +562,7 @@ function printHelp() {
   log('')
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-/**
- * Detect the test runner and its config file in cwd.
- * Returns { name, configFile, testCommand } or null.
- */
 function detectTestRunner(cwd) {
-  // Jest configs (check before vitest — projects more commonly use Jest)
   const jestConfigs = [
     'jest.config.js', 'jest.config.ts', 'jest.config.mjs',
     'jest.config.cjs', 'jest.config.json',
@@ -627,7 +574,6 @@ function detectTestRunner(cwd) {
     }
   }
 
-  // Also check package.json for "jest" key
   const pkgJson = path.join(cwd, 'package.json')
   if (fs.existsSync(pkgJson)) {
     try {
@@ -635,10 +581,9 @@ function detectTestRunner(cwd) {
       if (pkg.jest) {
         return { name: 'Jest (package.json)', configFile: pkgJson, testCommand: 'npx jest' }
       }
-    } catch { /* ignore */ }
+    } catch {  }
   }
 
-  // Vitest configs
   const vitestConfigs = [
     'vitest.config.js', 'vitest.config.ts', 'vitest.config.mjs',
   ]
@@ -652,15 +597,7 @@ function detectTestRunner(cwd) {
   return null
 }
 
-/**
- * Inject the nodox setup file into a Jest or Vitest config.
- * Returns { content: string, alreadyPresent: boolean }.
- *
- * Jest:   setupFiles goes at top-level of the config object
- * Vitest: setupFiles must be nested inside test: {}
- */
 function injectSetupFile(configFile, setupEntry, runnerName) {
-  // Special case: package.json with "jest" key
   if (path.basename(configFile) === 'package.json') {
     return injectIntoPackageJson(configFile, setupEntry)
   }
@@ -675,7 +612,6 @@ function injectSetupFile(configFile, setupEntry, runnerName) {
     return injectIntoVitestConfig(content, setupEntry)
   }
 
-  // Jest: already has setupFiles at top level?
   if (/setupFiles\s*:/.test(content)) {
     const updated = content.replace(
       /setupFiles\s*:\s*\[/,
@@ -684,22 +620,15 @@ function injectSetupFile(configFile, setupEntry, runnerName) {
     return { content: updated, alreadyPresent: false }
   }
 
-  // Jest: no setupFiles — inject into the exported config object
   const updated = injectIntoExport(content, `  setupFiles: ['${setupEntry}'],`)
   return { content: updated, alreadyPresent: false }
 }
 
-/**
- * Inject setupFiles into a Vitest config under the test: {} block.
- * Vitest requires setupFiles to be inside test: {}, not at top level.
- */
 function injectIntoVitestConfig(content, setupEntry) {
   const testBlockMatch = content.match(/\btest\s*:\s*\{/)
 
   if (testBlockMatch) {
-    // test: {} block exists — check if setupFiles is already inside it
     if (/\btest\s*:\s*\{[^]*?setupFiles\s*:/.test(content)) {
-      // Already has setupFiles inside test block — prepend to it
       const updated = content.replace(
         /(\btest\s*:\s*\{[^]*?setupFiles\s*:\s*\[)/,
         `$1'${setupEntry}', `
@@ -707,7 +636,6 @@ function injectIntoVitestConfig(content, setupEntry) {
       return { content: updated, alreadyPresent: false }
     }
 
-    // Inject setupFiles right after the opening brace of test: {
     const insertAt = testBlockMatch.index + testBlockMatch[0].length
     const before = content.slice(0, insertAt)
     const after = content.slice(insertAt)
@@ -718,14 +646,10 @@ function injectIntoVitestConfig(content, setupEntry) {
     }
   }
 
-  // No test: {} block — inject one into the top-level config object
   const line = `  test: {\n    setupFiles: ['${setupEntry}'],\n  },`
   return { content: injectIntoExport(content, line), alreadyPresent: false }
 }
 
-/**
- * Inject into package.json "jest" config key.
- */
 function injectIntoPackageJson(pkgFile, setupEntry) {
   const raw = fs.readFileSync(pkgFile, 'utf8')
   const pkg = JSON.parse(raw)
@@ -740,23 +664,13 @@ function injectIntoPackageJson(pkgFile, setupEntry) {
   return { content: JSON.stringify(pkg, null, 2) + '\n', alreadyPresent: false }
 }
 
-/**
- * Inject a line into the first exported object literal in a JS config file.
- * Works for: export default { }, module.exports = { }, defineConfig({ })
- */
 function injectIntoExport(content, lineToInject) {
-  // Strategy: find the last closing brace of the top-level export and insert before it
-  // This is deliberately naive — it handles the 99% case without a full AST parser.
 
-  // Find the opening of the config object
-  // Match: export default {, module.exports = {, defineConfig({
   const openMatch = content.match(/(export\s+default\s*\{|module\.exports\s*=\s*\{|defineConfig\s*\(\s*\{)/)
   if (!openMatch) {
-    // Can't find the config object — append a warning comment
     return content + `\n// TODO: add setupFiles: ['${lineToInject}'] manually\n`
   }
 
-  // Find the matching closing brace by counting braces
   let depth = 0
   let lastClose = -1
   const start = openMatch.index + openMatch[0].lastIndexOf('{')
@@ -771,11 +685,9 @@ function injectIntoExport(content, lineToInject) {
 
   if (lastClose === -1) return content
 
-  // Insert the line before the closing brace
   const before = content.slice(0, lastClose)
   const after = content.slice(lastClose)
 
-  // Add comma after last real entry if needed
   const trimmed = before.trimEnd()
   const needsComma = trimmed.length > 0 &&
     !trimmed.endsWith(',') &&
@@ -784,9 +696,6 @@ function injectIntoExport(content, lineToInject) {
   return `${trimmed}${needsComma ? ',' : ''}\n${lineToInject}\n${after}`
 }
 
-/**
- * Add .apicache.json to .gitignore if a .gitignore exists and doesn't already include it.
- */
 function ensureGitignore(cwd) {
   const gitignorePath = path.join(cwd, '.gitignore')
   if (!fs.existsSync(gitignorePath)) return

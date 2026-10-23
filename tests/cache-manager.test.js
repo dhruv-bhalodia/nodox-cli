@@ -1,9 +1,3 @@
-/**
- * Cache Manager Tests
- *
- * Tests .apicache.json read/write/merge/prune logic.
- * Uses a real temp file for every test — no mocks.
- */
 
 import { jest } from '@jest/globals'
 import fs from 'fs'
@@ -12,22 +6,18 @@ import os from 'os'
 import { readCache, writeCache, mergeCacheEntry, pruneCache, getCacheStats } from '../src/layer4/cache-manager.js'
 import { inferShape } from '../src/schema/response-interceptor.js'
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
 function tmpCacheFile() {
   return path.join(os.tmpdir(), `nodox-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
 }
 
 function cleanup(file) {
-  try { fs.unlinkSync(file) } catch { /* already gone */ }
-  try { fs.unlinkSync(file + '.tmp') } catch { /* already gone */ }
+  try { fs.unlinkSync(file) } catch {  }
+  try { fs.unlinkSync(file + '.tmp') } catch {  }
 }
-
-// ── readCache ─────────────────────────────────────────────────────────────
 
 describe('readCache', () => {
   test('returns empty structure when file does not exist', () => {
-    const file = tmpCacheFile() // does not exist
+    const file = tmpCacheFile()
     const result = readCache(file)
     expect(result.version).toBe(1)
     expect(result.routes).toEqual({})
@@ -82,8 +72,6 @@ describe('readCache', () => {
   })
 })
 
-// ── writeCache ────────────────────────────────────────────────────────────
-
 describe('writeCache', () => {
   test('writes readable JSON to disk', () => {
     const file = tmpCacheFile()
@@ -135,8 +123,6 @@ describe('writeCache', () => {
   })
 })
 
-// ── mergeCacheEntry ───────────────────────────────────────────────────────
-
 describe('mergeCacheEntry', () => {
   test('creates a new entry when key does not exist', () => {
     const cache = { version: 1, routes: {} }
@@ -164,14 +150,12 @@ describe('mergeCacheEntry', () => {
 
   test('merges new response fields into existing shape', () => {
     let cache = { version: 1, routes: {} }
-    // First run: only id + name
     cache = mergeCacheEntry(cache, 'GET:/users', {
       method: 'GET', path: '/users',
       reqShape: null,
       resShape: inferShape([{ id: 1, name: 'Alice' }]),
       resStatus: 200,
     })
-    // Second run: adds email field
     cache = mergeCacheEntry(cache, 'GET:/users', {
       method: 'GET', path: '/users',
       reqShape: null,
@@ -182,7 +166,7 @@ describe('mergeCacheEntry', () => {
     const props = cache.routes['GET:/users'].output.items.properties
     expect(props.id).toBeDefined()
     expect(props.name).toBeDefined()
-    expect(props.email).toBeDefined() // added by second merge
+    expect(props.email).toBeDefined()
   })
 
   test('stores request body shape', () => {
@@ -233,12 +217,9 @@ describe('mergeCacheEntry', () => {
   })
 })
 
-// ── pruneCache ────────────────────────────────────────────────────────────
-
 describe('pruneCache', () => {
   test('wipes all routes and writes empty cache', () => {
     const file = tmpCacheFile()
-    // Write some data first
     writeCache(file, {
       routes: {
         'GET:/a': { method: 'GET', path: '/a' },
@@ -260,8 +241,6 @@ describe('pruneCache', () => {
     cleanup(file)
   })
 })
-
-// ── getCacheStats ─────────────────────────────────────────────────────────
 
 describe('getCacheStats', () => {
   test('returns correct counts', () => {

@@ -1,42 +1,11 @@
-/**
- * validate() — Primary Schema Registration Path
- *
- * The recommended way to get complete, reliable schema documentation in nodox.
- * Developers use this in place of writing their own validation middleware.
- *
- * Usage:
- *   import { validate } from 'nodox-cli'
- *   import { z } from 'zod'
- *
- *   const createUserSchema = z.object({
- *     name: z.string(),
- *     email: z.string().email(),
- *   })
- *
- *   app.post('/users', validate(createUserSchema), (req, res) => {
- *     // req.body is validated and typed
- *     res.status(201).json(req.body)
- *   })
- *
- * Why use validate() instead of inline validation?
- *   - Schema is registered at route-registration time — not at request time
- *   - Works through any bundler, minifier, or transpiler
- *   - Produces a complete JSON Schema in the UI immediately on startup
- *   - The validate() call IS your validation — no duplication
- *
- * Supports: Zod schemas, Joi schemas, yup schemas, Valibot schemas,
- *           TypeBox schemas, plain JSON Schema objects
- */
 
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import { createRequire } from 'module'
 
 const _require = createRequire(import.meta.url)
 
-// TypeBox uses a well-known Symbol to tag its schema objects
 const _TYPEBOX_KIND = Symbol.for('TypeBox.Kind')
 
-// Lazy-loaded module cache for optional peer deps
 let _valibotModule = null
 let _typeboxValueModule = null
 
@@ -52,36 +21,11 @@ async function _getTypeBoxValue() {
   return _typeboxValueModule
 }
 
-/**
- * Internal registry: route key → registered schema info
- * Route key format: "METHOD:path" e.g. "POST:/api/users"
- *
- * @type {Map<string, RegisteredSchema>}
- */
 export const schemaRegistry = new Map()
 
-/**
- * @typedef {Object} RegisteredSchema
- * @property {'zod'|'joi'|'jsonschema'} library
- * @property {object} rawSchema - The original schema object
- * @property {object} jsonSchema - Converted to JSON Schema format
- * @property {string|null} source - File:line where schema was defined
- * @property {'confirmed'} confidence - Always 'confirmed' for validate()
- */
-
-/**
- * Create a validation middleware that also registers the schema with nodox.
- *
- * @param {object} schema - A Zod schema, Joi schema, or JSON Schema object
- * @param {object} [options]
- * @param {boolean} [options.strict=false] - Reject unknown fields (Zod: strip vs strict)
- * @param {object} [options.response] - Zod schema, Joi schema, or JSON Schema describing the response body
- * @returns {Function} Express middleware
- */
 export function validate(schema, options = {}) {
   const { strict = false, response: responseSchema, responses, tags, meta, auth, externalDocs, problemDetails = false } = options
 
-  // Detect schema type
   const library = detectSchemaLibrary(schema)
   if (!library) {
     throw new Error(
@@ -90,10 +34,8 @@ export function validate(schema, options = {}) {
     )
   }
 
-  // Convert to JSON Schema for UI display
   const jsonSchema = toJsonSchema(schema, library)
 
-  // Convert optional response schema to JSON Schema
   let outputJsonSchema = null
   if (responseSchema) {
     const responseLibrary = detectSchemaLibrary(responseSchema)
@@ -107,7 +49,6 @@ export function validate(schema, options = {}) {
     }
   }
 
-  // Convert responses map { [status]: schema } → { [status]: jsonSchema }
   let outputByStatus = null
   if (responses && typeof responses === 'object') {
     outputByStatus = {}
@@ -125,7 +66,6 @@ export function validate(schema, options = {}) {
     ? tags.filter(t => typeof t === 'string' && t.length > 0)
     : null
 
-  // Normalize meta — only keep known keys with correct types
   let normalizedMeta = null
   if (meta && typeof meta === 'object') {
     const m = {}
@@ -136,7 +76,6 @@ export function validate(schema, options = {}) {
     if (Object.keys(m).length > 0) normalizedMeta = m
   }
 
-  // Normalize auth — validate type and type-specific fields
   const _VALID_AUTH_TYPES = new Set(['bearer', 'apiKey', 'basic', 'oauth2'])
   let normalizedAuth = null
   if (auth && typeof auth === 'object' && _VALID_AUTH_TYPES.has(auth.type)) {
@@ -154,7 +93,6 @@ export function validate(schema, options = {}) {
     normalizedAuth = a
   }
 
-  // Normalize externalDocs — must have a valid URL string
   let normalizedExternalDocs = null
   if (externalDocs && typeof externalDocs === 'object' && typeof externalDocs.url === 'string' && externalDocs.url.trim()) {
     normalizedExternalDocs = { url: externalDocs.url.trim() }
@@ -163,13 +101,8 @@ export function validate(schema, options = {}) {
     }
   }
 
-  // Capture callsite so UI can show "defined in src/routes/users.js:12"
   const source = captureValidateCallsite()
 
-  // The route key isn't known until this middleware is attached to a route.
-  // We use a deferred registration approach: the middleware function carries
-  // the schema, and the app-patcher reads it from the handler array when
-  // a route is registered.
   const registeredSchema = {
     library,
     rawSchema: schema,
@@ -185,12 +118,6 @@ export function validate(schema, options = {}) {
     confidence: 'confirmed',
   }
 
-  /**
-   * The actual Express middleware.
-   * Runs schema.safeParse (Zod) or schema.validate (Joi) on req.body.
-   * On failure: 400 with validation error detail (or RFC 7807 Problem Details if problemDetails: true).
-   * On success: replaces req.body with parsed/coerced value and calls next().
-   */
   async function nodoxValidateMiddleware(req, res, next) {
     let result
 
@@ -272,11 +199,9 @@ export function validate(schema, options = {}) {
               code: 'invalid_value',
             })))
           }
-          // TypeBox doesn't coerce by default — pass through as-is
         }
 
       } else if (library === 'jsonschema') {
-        // Display-only — no runtime validation
         req.body = req.body
       }
     } catch (err) {
@@ -294,64 +219,44 @@ export function validate(schema, options = {}) {
     next()
   }
 
-  // Attach the schema to the middleware function so app-patcher can read it
   nodoxValidateMiddleware.__nodoxSchema = registeredSchema
   nodoxValidateMiddleware.__isNodoxValidate = true
 
   return nodoxValidateMiddleware
 }
 
-/**
- * Detect which schema library produced a given schema object.
- * @param {any} schema
- * @returns {'zod'|'joi'|'yup'|'valibot'|'typebox'|'jsonschema'|null}
- */
 export function detectSchemaLibrary(schema) {
   if (!schema || typeof schema !== 'object') return null
 
-  // Zod v3: _def.typeName, Zod v4: .def.type + .safeParse + .toJSONSchema
   if (schema._def?.typeName) return 'zod'
   if (typeof schema.safeParse === 'function' && typeof schema.toJSONSchema === 'function') return 'zod'
   if (schema.def?.type && typeof schema.safeParse === 'function') return 'zod'
 
-  // Joi schemas have an isJoi flag or $_root
   if (schema.isJoi || schema.$_root) return 'joi'
   if (schema.type && typeof schema.type === 'string' && schema.$_terms) return 'joi'
 
-  // yup v1: has _type string + validateSync; yup v0: __isYupSchema__
   if (schema._type && typeof schema.validateSync === 'function') return 'yup'
   if (schema.__isYupSchema__ && typeof schema.validate === 'function') return 'yup'
 
-  // Valibot v1: '~standard' interface with vendor tag; older: kind='schema' + _run
   if (schema['~standard']?.vendor === 'valibot') return 'valibot'
   if (schema.kind === 'schema' && typeof schema._run === 'function') return 'valibot'
 
-  // TypeBox: tagged with Symbol.for('TypeBox.Kind') — schemas are already JSON Schema
   if (_TYPEBOX_KIND in schema) return 'typebox'
 
-  // Plain JSON Schema: has type/properties but not zod-like methods
   if ((schema.type || schema.properties || schema.$schema || schema.anyOf) &&
       typeof schema.safeParse !== 'function') return 'jsonschema'
 
   return null
 }
 
-/**
- * Convert any supported schema to JSON Schema format.
- * @param {object} schema
- * @param {'zod'|'joi'|'yup'|'valibot'|'typebox'|'jsonschema'} library
- * @returns {object} JSON Schema object
- */
 export function toJsonSchema(schema, library) {
   try {
     if (library === 'zod') {
-      // Zod v4 has a native toJSONSchema() method — prefer it
       if (typeof schema.toJSONSchema === 'function') {
         const result = schema.toJSONSchema()
         const { $schema, ...rest } = result
         return rest
       }
-      // Zod v3 fallback: use zod-to-json-schema package
       return zodToJsonSchema(schema, {
         name: undefined,
         $refStrategy: 'none',
@@ -367,19 +272,16 @@ export function toJsonSchema(schema, library) {
     }
 
     if (library === 'valibot') {
-      // Try the official converter first (valibot ≥ 1.0 ships @valibot/to-json-schema or a built-in)
       try {
         const v = _require('valibot')
         if (typeof v.toJsonSchema === 'function') {
           return v.toJsonSchema(schema)
         }
-      } catch { /* not available — fall through to structural extraction */ }
+      } catch {  }
       return valibotToJsonSchema(schema)
     }
 
     if (library === 'typebox') {
-      // TypeBox schemas ARE JSON Schema objects — strip TypeBox-only Symbol keys (they
-      // don't serialize anyway) and pass through. Remove $schema to match our other converters.
       const { $schema, ...rest } = schema
       return rest
     }
@@ -394,11 +296,6 @@ export function toJsonSchema(schema, library) {
   return { type: 'object' }
 }
 
-/**
- * Best-effort yup → JSON Schema conversion via schema.describe().
- * @param {object} yupSchema
- * @returns {object}
- */
 function yupToJsonSchema(yupSchema) {
   try {
     const desc = yupSchema.describe()
@@ -420,7 +317,6 @@ function yupDescToJsonSchema(desc) {
         const required = []
         for (const [key, val] of Object.entries(desc.fields)) {
           out.properties[key] = yupDescToJsonSchema(val)
-          // yup fields without optional/nullable flag are required
           const isOptional = val.optional === true || val.nullable === true
           if (!isOptional) required.push(key)
         }
@@ -451,7 +347,6 @@ function yupDescToJsonSchema(desc) {
 
   if (desc.label) out.description = desc.label
 
-  // yup .nullable() sets desc.nullable = true
   if (desc.nullable === true && out.type && out.type !== 'null') {
     out.type = [out.type, 'null']
   }
@@ -459,13 +354,6 @@ function yupDescToJsonSchema(desc) {
   return out
 }
 
-/**
- * Best-effort Joi → JSON Schema conversion.
- * Handles the common cases (object, string, number, boolean, array).
- * For complex Joi schemas, output is approximate.
- * @param {object} joiSchema
- * @returns {object}
- */
 function joiToJsonSchema(joiSchema) {
   try {
     const desc = joiSchema.describe()
@@ -527,7 +415,6 @@ function joiDescToJsonSchema(desc) {
     out.description = desc.flags.description
   }
 
-  // Nullable: Joi's .allow(null) sets allow array containing null
   if (Array.isArray(desc.allow) && desc.allow.includes(null) && out.type && out.type !== 'null') {
     out.type = [out.type, 'null']
   }
@@ -535,37 +422,15 @@ function joiDescToJsonSchema(desc) {
   return out
 }
 
-/**
- * Register a schema for a specific route.
- * Called by the app-patcher when it finds a validate() middleware in a handler chain.
- *
- * @param {string} method
- * @param {string} path
- * @param {RegisteredSchema} schema
- */
 export function registerSchemaForRoute(method, path, schema) {
   const key = `${method.toUpperCase()}:${path}`
   schemaRegistry.set(key, schema)
 }
 
-/**
- * Get the registered schema for a route, if any.
- * @param {string} method
- * @param {string} path
- * @returns {RegisteredSchema|null}
- */
 export function getSchemaForRoute(method, path) {
   return schemaRegistry.get(`${method.toUpperCase()}:${path}`) ?? null
 }
 
-/**
- * Best-effort Valibot → JSON Schema structural extraction.
- * Used when the valibot package's own toJsonSchema is unavailable.
- * Handles object, string, number, boolean, array, optional, nullable, union.
- * @param {object} schema - valibot schema object
- * @param {number} [depth=0] - recursion guard
- * @returns {object} JSON Schema object
- */
 function valibotToJsonSchema(schema, depth = 0) {
   if (depth > 12 || !schema || typeof schema !== 'object') return {}
   const type = schema.type
@@ -624,8 +489,6 @@ function captureValidateCallsite() {
       const file = match[1]
       if (file.includes('nodox-cli/src') || file.includes('node_modules/nodox-cli')) continue
       if (file.includes('node:internal')) continue
-      // Return a project-relative path instead of the full absolute path.
-      // Avoids leaking the server's filesystem layout to the browser UI.
       const cwd = process.cwd()
       const relative = file.startsWith(cwd)
         ? file.slice(cwd.length).replace(/^[\\/]/, '')

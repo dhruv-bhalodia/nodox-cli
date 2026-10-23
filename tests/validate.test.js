@@ -1,12 +1,8 @@
-/**
- * validate() Wrapper Tests
- */
 
 import { jest } from '@jest/globals'
 import { z } from 'zod'
 import { validate, detectSchemaLibrary, toJsonSchema, schemaRegistry } from '../src/schema/validate.js'
 
-// Minimal mock req/res/next for middleware testing
 function mockReqRes(body = {}) {
   const req = { body }
   const res = {

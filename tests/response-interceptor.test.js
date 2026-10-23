@@ -1,7 +1,3 @@
-/**
- * Response Interceptor Tests — Layer 5
- * Tests shape inference and shape merging logic.
- */
 
 import { inferShape, mergeShapes, createResponseInterceptor } from '../src/schema/response-interceptor.js'
 
@@ -61,10 +57,8 @@ describe('inferShape', () => {
   })
 
   test('caps recursion depth at 8', () => {
-    // Build deeply nested object
     let obj = { value: 1 }
     for (let i = 0; i < 12; i++) { obj = { nested: obj } }
-    // Should not throw or recurse infinitely
     expect(() => inferShape(obj)).not.toThrow()
   })
 
@@ -130,7 +124,7 @@ describe('createResponseInterceptor', () => {
 
     const req = { method: 'GET', route: { path: '/users' } }
     const res = {
-      json: (body) => body, // original json
+      json: (body) => body,
     }
     const next = () => {}
 

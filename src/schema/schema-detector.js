@@ -1,18 +1,3 @@
-/**
- * Schema Detector — Orchestrator
- *
- * Coordinates all schema detection layers and maintains the complete
- * per-route schema registry. Called by the main middleware.
- *
- * Layer priority (highest confidence first):
- *   Tier 1: validate() wrapper          → confidence: 'confirmed'
- *   Layer 3: Dry run from flagged fns   → confidence: 'inferred'
- *   Layer 4: Test suite cache           → confidence: 'observed' (loaded at startup)
- *   Layer 5: Live response shapes       → confidence: 'observed'
- *
- * The UI marks each route's schema with its confidence level so developers
- * know what to trust.
- */
 
 import { looksLikeValidator } from './source-screener.js'
 import { dryRunValidator, registerForDryRun, _schemaRegistryArray, markSchemaDetectedInDryRun, createNullProbeBody } from './dry-runner.js'
@@ -23,64 +8,21 @@ import { loadCacheEntries } from '../layer4/cache-reader.js'
 
 const require = createRequire(import.meta.url)
 
-/**
- * @typedef {Object} RouteSchema
- * @property {object|null} input - JSON Schema for request body (POST/PUT/PATCH)
- * @property {object|null} output - JSON Schema for response body (from Layer 5)
- * @property {Record<string, object>|null} outputByStatus - per-status response schemas from validate() responses option
- * @property {object|null} querySchema - JSON Schema for query string parameters (observed from live traffic)
- * @property {'confirmed'|'inferred'|'observed'|'none'} inputConfidence
- * @property {'observed'|'none'} outputConfidence
- * @property {'observed'|'none'} querySchemaConfidence
- * @property {string|null} source - Where the schema was defined
- * @property {string[]|null} tags - route tags from validate()
- * @property {{summary?: string, description?: string, examples?: object}|null} meta - route metadata from validate()
- * @property {{type: string, name?: string, in?: string, scopes?: string[], description?: string}|null} auth - auth requirement from validate()
- */
-
-/**
- * Per-route schema storage.
- * Key format: "METHOD:path" e.g. "POST:/api/users"
- * @type {Map<string, RouteSchema>}
- */
 const routeSchemas = new Map()
 
-/**
- * WeakMap from parsed value objects → their JSON Schema.
- * Populated by patched .parse() / .safeParse() / .validate() methods.
- * Checked by the response interceptor when res.json() fires.
- * Only object/array values can be WeakMap keys — primitives are skipped.
- *
- * @type {WeakMap<object, object>}
- */
 export const parsedValueToSchema = new WeakMap()
 
-/** Cache JSON Schema conversion per schema instance to avoid re-computing on every parse call. */
 const schemaJsonSchemaCache = new WeakMap()
 
-/** Confidence order — never downgrade. Shared for both input and output. */
 const CONFIDENCE_ORDER = { confirmed: 3, inferred: 2, observed: 1, none: 0 }
 
-/**
- * Raw cache entries from .apicache.json, kept after loadCacheIntoRegistry so that
- * enrichRoutesWithSchemas can do URL→template matching for parameterized routes.
- * e.g. cache entry "GET:/api/users/123" matches route template "GET:/api/users/:id".
- * @type {Record<string, object>|null}
- */
 let _rawCacheEntries = null
 
-/**
- * Check if a concrete URL path matches an Express route template.
- * Handles :param segments (wildcards) and strips query strings from the URL.
- * @param {string} urlPath  - actual URL e.g. "/api/users/123"
- * @param {string} template - Express template e.g. "/api/users/:id"
- * @returns {boolean}
- */
 function urlMatchesTemplate(urlPath, templatePath) {
   if (!urlPath || !templatePath) return false
   if (templatePath === '*' || templatePath === '/*') return false
 
-  const url = urlPath.split('?')[0]  // strip query string
+  const url = urlPath.split('?')[0]
   const urlSegs = url.split('/').filter(Boolean)
   const tplSegs = templatePath.split('/').filter(Boolean)
 
@@ -88,17 +30,13 @@ function urlMatchesTemplate(urlPath, templatePath) {
 
   for (let i = 0; i < tplSegs.length; i++) {
     const seg = tplSegs[i]
-    if (seg.startsWith(':')) continue              // named param — matches any segment
-    if (seg.startsWith('(') && seg.endsWith(')')) continue  // Express regex group
+    if (seg.startsWith(':')) continue
+    if (seg.startsWith('(') && seg.endsWith(')')) continue
     if (seg !== urlSegs[i]) return false
   }
   return true
 }
 
-/**
- * Scan raw cache entries to find one whose URL matches the given route template.
- * Used in enrichRoutesWithSchemas to fill schemas for parameterized routes.
- */
 function _findMatchingCacheEntry(method, templatePath) {
   if (!_rawCacheEntries) return null
   const upper = method.toUpperCase()
@@ -111,14 +49,6 @@ function _findMatchingCacheEntry(method, templatePath) {
   return null
 }
 
-// ── express-validator detection ───────────────────────────────────────────────
-
-/**
- * Detect whether a handler is an express-validator ValidationChain.
- * Works with both v6 (._context) and v7 (.builder).
- * @param {any} fn
- * @returns {boolean}
- */
 function _isExpressValidatorChain(fn) {
   if (!fn || typeof fn !== 'function') return false
   if (fn.builder?.fields && Array.isArray(fn.builder.fields)) return true
@@ -126,11 +56,6 @@ function _isExpressValidatorChain(fn) {
   return false
 }
 
-/**
- * Infer a JSON Schema type from an express-validator chain's validator stack.
- * @param {any[]} validators
- * @returns {object} JSON Schema fragment
- */
 function _inferEVFieldType(validators) {
   for (const v of validators) {
     const name = typeof v?.validator === 'function' ? v.validator.name
@@ -155,23 +80,16 @@ function _inferEVFieldType(validators) {
   return { type: 'string' }
 }
 
-/**
- * Extract a JSON Schema from express-validator chains found in a handler list.
- * Returns null if no express-validator chains are present.
- * @param {any[]} handlers
- * @returns {object|null}
- */
 function _extractExpressValidatorSchema(handlers) {
   const properties = {}
 
   for (const fn of handlers) {
     if (!_isExpressValidatorChain(fn)) continue
 
-    // v7 uses .builder; v6 uses ._context
     const ctx = fn.builder ?? fn._context
     const fields     = ctx?.fields     ?? []
-    const validators = ctx?.stack      ??  // v7
-                       ctx?.validators ??  // v6 alternate
+    const validators = ctx?.stack      ??
+                       ctx?.validators ??
                        []
 
     for (const field of fields) {
@@ -209,28 +127,14 @@ function getOrCreateSchema(method, path) {
   return routeSchemas.get(key)
 }
 
-/**
- * Load .apicache.json into the route schema registry (Layer 4).
- * Called once at startup, before routes are registered.
- * Cache entries have 'observed' confidence — lower than confirmed/inferred,
- * but they populate the UI immediately without waiting for test traffic.
- *
- * Priority rule: cache entries NEVER overwrite confirmed or inferred schemas.
- * They only fill slots where inputConfidence === 'none'.
- *
- * @param {string|null} [cacheFile] - override for testing
- */
 export function loadCacheIntoRegistry(cacheFile) {
   const entries = loadCacheEntries(cacheFile)
   const keys = Object.keys(entries)
   if (keys.length === 0) return 0
 
-  // Keep the raw entries so enrichRoutesWithSchemas can do template matching later
-  // (e.g. "GET:/api/users/123" in cache → "GET:/api/users/:id" route template)
   _rawCacheEntries = entries
 
   for (const [key, entry] of Object.entries(entries)) {
-    // Parse key back to method + path
     const colonIdx = key.indexOf(':')
     if (colonIdx === -1) continue
     const method = key.slice(0, colonIdx)
@@ -238,11 +142,9 @@ export function loadCacheIntoRegistry(cacheFile) {
 
     const existing = routeSchemas.get(key)
 
-    // Never downgrade a confirmed or inferred input schema
     const canSetInput = !existing ||
       (existing.inputConfidence === 'none' && entry.input)
 
-    // Output is always safe to set from cache (observed is the only level for output)
     const canSetOutput = !existing ||
       (!existing.output && entry.output)
 
@@ -269,23 +171,10 @@ export function loadCacheIntoRegistry(cacheFile) {
 
 let _detectorInitialized = false
 
-/**
- * Initialize the schema detector.
- * Patches Zod and Joi if they're available.
- * Idempotent — safe to call multiple times.
- */
 export function initSchemaDetector() {
   if (_detectorInitialized) return
   _detectorInitialized = true
 
-  // Patch schema libraries at startup.
-  // require('zod') resolves from nodox's own bundle location — which may be a
-  // different version than the user's app uses (e.g. nodox bundles Zod v4 but
-  // the user has Zod v3). We try two paths:
-  //   1. require.resolve from process.cwd() — finds the user's installed zod
-  //   2. plain require('zod') — fallback to whatever is resolvable
-  // Either way, patchZodWithRegistry wraps the factory methods and patches the
-  // prototype, so dry-run interception works for the user's schemas.
   try {
     let zodPath
     try {
@@ -298,7 +187,7 @@ export function initSchemaDetector() {
     if (z) {
       patchZodWithRegistry(z)
     }
-  } catch { /* zod not installed */ }
+  } catch {  }
 
   try {
     const joi = require('joi')
@@ -306,7 +195,7 @@ export function initSchemaDetector() {
     if (j) {
       patchJoiWithRegistry(j)
     }
-  } catch { /* joi not installed */ }
+  } catch {  }
 
   try {
     const yup = require('yup')
@@ -314,32 +203,13 @@ export function initSchemaDetector() {
     if (y) {
       patchYupWithRegistry(y)
     }
-  } catch { /* yup not installed */ }
+  } catch {  }
 }
 
-// _patchedZInstances must be initialized before initSchemaDetector() runs below,
-// because patchZodWithRegistry() accesses it. Declaring it here (above the call)
-// avoids a TDZ ReferenceError that would silently swallow the startup patch.
 const _patchedZInstances = new WeakSet()
 
-// Patch at module load time so schemas created after `import nodox from 'nodox-cli'`
-// (including module-level const schema = z.object({...})) are registered
-// before the dry-run fires.
 initSchemaDetector()
 
-/**
- * Tag a parsed value in parsedValueToSchema so the response interceptor can
- * identify when res.json(body) was called with a schema-validated value.
- * Computes and caches the JSON Schema for the schema instance on first call.
- * 
- * Note: Only object/array values can be tagged because WeakMap requires
- * object keys. Primitive responses (strings, numbers) will still be documented
- * via Layer 5 (structural inference) but will have 'observed' confidence.
- *
- * @param {any} value - The validated/parsed output
- * @param {object} schema - The schema instance that produced it
- * @param {'zod'|'joi'|'yup'} library
- */
 function tagParsedValue(value, schema, library) {
   if (value === null || value === undefined || typeof value !== 'object') return
   try {
@@ -352,14 +222,6 @@ function tagParsedValue(value, schema, library) {
   } catch {}
 }
 
-/**
- * Patch a single Zod schema instance's parse/safeParse/parseAsync/safeParseAsync
- * to tag their output values in parsedValueToSchema.
- *
- * In Zod v4, these methods are OWN PROPERTIES on each instance (not prototype methods),
- * so we patch per-instance. In Zod v3, they live on ZodType.prototype — we handle that
- * via patchZodProtoForOutputTracking().
- */
 function patchZodInstanceForOutputTracking(schema) {
   const handlers = {
     parse(orig) {
@@ -394,12 +256,10 @@ function patchZodInstanceForOutputTracking(schema) {
 
   for (const [method, wrap] of Object.entries(handlers)) {
     if (typeof schema[method] !== 'function') continue
-    if (schema[method].__nodoxTracked) continue  // already patched
+    if (schema[method].__nodoxTracked) continue
     const orig = schema[method]
     const patched = wrap(orig)
     patched.__nodoxTracked = true
-    // Zod v4: parse methods are OWN writable properties on the instance
-    // Direct assignment may fail on module namespace objects — use defineProperty fallback
     try {
       schema[method] = patched
     } catch {
@@ -408,17 +268,7 @@ function patchZodInstanceForOutputTracking(schema) {
   }
 }
 
-/**
- * Attempt to patch ZodType.prototype for Zod v3.
- * In Zod v3, parse/safeParse live on the prototype so one patch covers all schemas
- * including chained ones (.optional(), .transform(), etc.).
- * In Zod v4, ZodType.prototype is empty — per-instance patching (above) is used instead.
- * Idempotent.
- */
 export function patchZodProtoForOutputTracking(z) {
-  // Walk up from a sample instance to find the deepest ancestor before
-  // Object.prototype that still has parse(). That's ZodType.prototype in Zod v3.
-  // In Zod v4, parse is an own property — no ancestor proto will have it.
   let baseProto
   try {
     let proto = Object.getPrototypeOf(z.string())
@@ -432,7 +282,6 @@ export function patchZodProtoForOutputTracking(z) {
     }
   } catch { return }
 
-  // Only proceed if this prototype actually has parse (Zod v3)
   if (!baseProto || typeof baseProto.parse !== 'function' || baseProto.__nodoxZodProtoPatched) return
   baseProto.__nodoxZodProtoPatched = true
 
@@ -465,11 +314,6 @@ export function patchZodProtoForOutputTracking(z) {
       }
       return result
     },
-    // _parseSync / _parseAsync are the internal prototype methods that the
-    // per-instance bound parse() functions call. Patching these intercepts ALL
-    // schema parse calls including schemas created before patchZodWithRegistry ran
-    // (ESM module-level schemas). Works for Zod v3.x where parse is a bound
-    // own property that still delegates to _parseSync on the prototype.
     _parseSync: (orig) => function nodoxTracked_parseSync(...args) {
       markSchemaDetectedInDryRun(this, 'zod')
       return orig.apply(this, args)
@@ -486,9 +330,6 @@ export function patchZodProtoForOutputTracking(z) {
   }
 }
 
-/**
- * Patch Joi prototype once for output tracking (covers all Joi schema types).
- */
 function patchJoiProtoForOutputTracking(joi) {
   let baseProto
   try {
@@ -516,9 +357,6 @@ function patchJoiProtoForOutputTracking(joi) {
   }
 }
 
-/**
- * Patch yup prototype once for output tracking.
- */
 function patchYupProtoForOutputTracking(yup) {
   let baseProto
   try {
@@ -556,18 +394,6 @@ function patchYupProtoForOutputTracking(yup) {
   }
 }
 
-/**
- * Patch Zod factory methods for dry-run registration and output tracking.
- *
- * Strategy (handles both Zod v3 and v4):
- *   - Try to patch factory methods (z.object, z.string, …) so every created
- *     schema is registered for dry-run AND has its parse methods patched.
- *     Factory method assignment may fail on module namespace objects (Zod v4 ESM);
- *     Object.defineProperty is used as a fallback.
- *   - Also try prototype-level patching (Zod v3 only, where parse is on ZodType.prototype).
- *
- * Idempotent per-z instance (guarded by a WeakSet).
- */
 export function patchZodWithRegistry(z) {
   if (!z || _patchedZInstances.has(z)) return
   _patchedZInstances.add(z)
@@ -590,8 +416,6 @@ export function patchZodWithRegistry(z) {
       return schema
     }
 
-    // Direct assignment works for mutable z objects; fall back to defineProperty
-    // for Zod v4 ESM namespace objects (writable but not directly assignable)
     try {
       z[method] = wrapped
     } catch {
@@ -599,14 +423,9 @@ export function patchZodWithRegistry(z) {
     }
   }
 
-  // Prototype-level patch for Zod v3 (covers chained schemas on ZodType.prototype)
   patchZodProtoForOutputTracking(z)
 }
 
-/**
- * Patch Joi factory methods for dry-run registration, then patch the prototype
- * for output tracking.
- */
 function patchJoiWithRegistry(joi) {
   const methodsToWrap = ['object', 'string', 'number', 'boolean', 'array',
     'any', 'date', 'alternatives', 'binary']
@@ -628,10 +447,6 @@ function patchJoiWithRegistry(joi) {
   patchJoiProtoForOutputTracking(joi)
 }
 
-/**
- * Patch yup factory methods for dry-run registration, then patch the prototype
- * for output tracking.
- */
 function patchYupWithRegistry(yup) {
   const methodsToWrap = ['object', 'string', 'number', 'boolean', 'array', 'mixed', 'date']
 
@@ -652,52 +467,22 @@ function patchYupWithRegistry(yup) {
   patchYupProtoForOutputTracking(yup)
 }
 
-/**
- * Set of "METHOD:path" strings that went through onRouteRegistered via the patcher.
- * Routes NOT in this set were registered before patchApp ran and need retroactive
- * schema detection when doExtraction() runs at startup.
- */
 const _registeredRoutePaths = new Set()
 
-/**
- * Returns true if this route was registered through patchApp's onRouteRegistered
- * callback (i.e., was defined after nodox(app) was called).
- * @param {string} method
- * @param {string} path
- * @returns {boolean}
- */
 export function wasRouteRegistered(method, path) {
   return _registeredRoutePaths.has(routeKey(method, path))
 }
 
-/**
- * Called when query parameters are observed from a live request.
- * Stores as 'observed' confidence — only fills routes with no existing querySchema.
- *
- * @param {string} method
- * @param {string} path
- * @param {object} shape - Inferred JSON Schema shape of req.query
- * @param {Function} [onUpdate]
- */
 export function onQueryObserved(method, path, shape, onUpdate) {
   const entry = getOrCreateSchema(method, path)
-  if (entry.querySchemaConfidence !== 'none') return  // already have query schema
+  if (entry.querySchemaConfidence !== 'none') return
   entry.querySchema = shape
   entry.querySchemaConfidence = 'observed'
   if (typeof onUpdate === 'function') onUpdate()
 }
 
-/**
- * Called by app-patcher when a route is registered.
- * Checks for validate() wrapper (Tier 1) and flags fallback validators (Layer 2).
- *
- * @param {string} method
- * @param {string} path
- * @param {Function[]} handlers
- */
 export function onRouteRegistered(method, path, handlers) {
   _registeredRoutePaths.add(routeKey(method, path))
-  // Tier 1: Check if any handler is a nodox validate() middleware
   for (const handler of handlers) {
     if (handler?.__isNodoxValidate && handler?.__nodoxSchema) {
       const entry = getOrCreateSchema(method, path)
@@ -705,40 +490,32 @@ export function onRouteRegistered(method, path, handlers) {
       entry.inputConfidence = 'confirmed'
       entry.source = handler.__nodoxSchema.source
 
-      // Register confirmed output schema if provided via validate(schema, { response })
       if (handler.__nodoxSchema.outputJsonSchema) {
         entry.output = handler.__nodoxSchema.outputJsonSchema
         entry.outputConfidence = 'confirmed'
       }
 
-      // Per-status response schemas from validate(schema, { responses: { 200: X, 404: Y } })
       if (handler.__nodoxSchema.outputByStatus) {
         entry.outputByStatus = handler.__nodoxSchema.outputByStatus
       }
 
-      // Tags for grouping in the UI
       if (handler.__nodoxSchema.tags) {
         entry.tags = handler.__nodoxSchema.tags
       }
 
-      // Route metadata (summary, description, examples)
       if (handler.__nodoxSchema.meta) {
         entry.meta = handler.__nodoxSchema.meta
       }
 
-      // Auth requirement
       if (handler.__nodoxSchema.auth) {
         entry.auth = handler.__nodoxSchema.auth
       }
 
       registerSchemaForRoute(method, path, handler.__nodoxSchema)
-      return // confirmed — no need for fallback layers
+      return
     }
   }
 
-  // Tier 1.5: express-validator chains — read directly from chain metadata.
-  // Works without dry-running; gives 'inferred' confidence (same level as dry-run).
-  // Never overwrites a confirmed or already-inferred schema.
   const evSchema = _extractExpressValidatorSchema(handlers)
   if (evSchema) {
     const entry = getOrCreateSchema(method, path)
@@ -748,14 +525,9 @@ export function onRouteRegistered(method, path, handlers) {
     }
   }
 
-  // Layer 2 / 3: Flag validators for dry-run (Zod / Joi / yup)
   const flagged = handlers.filter(fn => typeof fn === 'function' && looksLikeValidator(fn))
   if (flagged.length > 0) {
     if (_dryRunStartupComplete) {
-      // Startup is done — run immediately so dynamic routes don't wait forever.
-      // _dryRunRoute is async; fire-and-forget here since onRouteRegistered is sync.
-      // scheduleExtraction() has a 50ms debounce — the dry-run will complete within
-      // that window and the next extraction will see the updated schema.
       _dryRunRoute(method, path, flagged).catch(() => {})
     } else {
       pendingDryRuns.push({ method, path, handlers: flagged })
@@ -763,26 +535,10 @@ export function onRouteRegistered(method, path, handlers) {
   }
 }
 
-/** Accumulates routes flagged for dry-run during registration phase */
 const pendingDryRuns = []
 
-/**
- * Whether the initial deferred dry-run batch has completed.
- * After this point, new routes are dry-run immediately rather than queued.
- */
 let _dryRunStartupComplete = false
 
-/**
- * Reconstruct an approximate JSON Schema from a ZodError thrown by schema.parse().
- *
- * Works for handlers that call schema.parse() without a try/catch — the error
- * propagates to the dry-runner's catch block. Only required fields are visible
- * (optional fields produce no error on an empty body). Marks the result with a
- * description so the UI can indicate the schema is approximate.
- *
- * @param {object} error - ZodError with .issues array
- * @returns {object|null} JSON Schema fragment, or null if nothing useful
- */
 function _reconstructSchemaFromZodError(error) {
   if (!Array.isArray(error?.issues) || error.issues.length === 0) return null
 
@@ -790,7 +546,6 @@ function _reconstructSchemaFromZodError(error) {
   const required = []
 
   for (const issue of error.issues) {
-    // Only handle top-level field errors (path.length === 1)
     if (!issue.path || issue.path.length !== 1) continue
     const field = String(issue.path[0])
     if (!field) continue
@@ -807,9 +562,6 @@ function _reconstructSchemaFromZodError(error) {
         ? { type: 'string', format: 'date-time' }
         : { type: jsType }
 
-      // Every field that errors on an empty body {} was missing = required.
-      // Zod v4 dropped the `received` property from issues so we cannot rely on
-      // `issue.received === 'undefined'` — use unconditional push instead.
       required.push(field)
     }
   }
@@ -818,33 +570,13 @@ function _reconstructSchemaFromZodError(error) {
 
   const schema = { type: 'object', properties }
   if (required.length > 0) schema.required = [...new Set(required)]
-  // Mark as approximate — optional fields and nested shapes are not visible from errors
   schema.description = '(inferred from validation errors — optional fields may be absent)'
   return schema
 }
 
-/**
- * Reconstruct a JSON Schema by merging results from two dry-run passes:
- *   Pass 1 (empty body `{}`):   only required fields appear in the ZodError
- *   Pass 2 (null-probe body):   ALL non-nullable fields appear in the ZodError
- *
- * Required fields  = those that appeared in the empty-body pass (set membership)
- * Optional fields  = those that appeared only in the null-probe pass
- * Nullable fields  = silently absent from the null-probe pass (accepted limitation)
- *
- * This handles three cases the single-pass approach could not:
- *   1. Optional fields invisible to the empty-body ZodError
- *   2. All-optional schemas where the empty-body run succeeds entirely
- *   3. Mixed schemas where Zod v4 dropped the `received` field from issues
- *
- * @param {object|null} emptyBodyError  - ZodError from safeParse({})
- * @param {object|null} nullProbeError  - ZodError from safeParse(createNullProbeBody())
- * @returns {object|null} JSON Schema, or null if nothing could be reconstructed
- */
 function _reconstructSchemaFromTwoPasses(emptyBodyError, nullProbeError) {
   if (!nullProbeError || !Array.isArray(nullProbeError.issues) || nullProbeError.issues.length === 0) return null
 
-  // Build the required-field set from Pass 1 (fields that errored on empty body = missing = required)
   const requiredFields = new Set()
   for (const issue of emptyBodyError?.issues ?? []) {
     if (issue.path?.length === 1) requiredFields.add(String(issue.path[0]))
@@ -877,29 +609,14 @@ function _reconstructSchemaFromTwoPasses(emptyBodyError, nullProbeError) {
 
   const schema = { type: 'object', properties }
   if (required.length > 0) schema.required = [...new Set(required)]
-  // No "optional fields may be absent" note — the null probe surfaced all fields
   return schema
 }
 
-/**
- * Run a dry-run attempt for a single route and update the registry if a schema
- * is detected. Used both by the deferred batch and inline post-startup.
- *
- * Async because dryRunValidator is now async (awaits one event-loop tick to catch
- * validation that happens after shallow Promise.resolve() chains).
- *
- * @param {string} method
- * @param {string} path
- * @param {Function[]} handlers
- * @returns {Promise<boolean>} true if a schema was detected
- */
 async function _dryRunRoute(method, path, handlers) {
   const existing = routeSchemas.get(routeKey(method, path))
   if (existing?.inputConfidence === 'confirmed') return false
 
   for (const handler of handlers) {
-    // Pass 1: empty body — tries schema-instance interception first (CJS schemas in registry).
-    // Also captures ZodError for handlers using schema.parse() without try/catch.
     const result = await dryRunValidator(handler, method)
 
     if (result.schema) {
@@ -913,20 +630,9 @@ async function _dryRunRoute(method, path, handlers) {
       const entry = getOrCreateSchema(method, path)
       entry.input = jsonSchema
       entry.inputConfidence = 'inferred'
-      return true // Schema instance intercepted — toJsonSchema gives all fields including optional
+      return true
     }
 
-    // Pass 2: null-probe body — runs when Pass 1 did not intercept the schema instance.
-    // This covers ESM Zod schemas (CJS/ESM split means nodox patches the wrong z instance)
-    // and all-optional schemas where safeParse({}) succeeds and produces no errors.
-    //
-    // The null-probe Proxy returns null for every property access and reports all keys as
-    // present (has trap). Zod validates each schema field against null, producing errors for
-    // every non-nullable field — both required and optional alike.
-    //
-    // We then merge:
-    //   required fields  = fields that errored in BOTH passes (or only Pass 1)
-    //   optional fields  = fields that errored ONLY in Pass 2 (absent from {}, fail with null)
     const nullResult = await dryRunValidator(handler, method, createNullProbeBody())
 
     if (nullResult.zodError || result.zodError) {
@@ -939,8 +645,6 @@ async function _dryRunRoute(method, path, handlers) {
       }
     }
 
-    // Both passes produced no errors and no intercepted schema. Last resort: single-pass
-    // ZodError reconstruction (handles schema.parse() without try/catch in the handler).
     if (result.zodError && !existing?.input) {
       const jsonSchema = _reconstructSchemaFromZodError(result.zodError)
       if (jsonSchema) {
@@ -954,24 +658,10 @@ async function _dryRunRoute(method, path, handlers) {
   return false
 }
 
-/**
- * Run Layer 3 (dry run) for all flagged routes.
- * Called once, deferred to after all routes are registered.
- * Async because _dryRunRoute awaits one event-loop tick per handler.
- */
 let _userZodProtoPatchApplied = false
 
-/**
- * Find the user's actual ZodType prototype by inspecting already-registered
- * Zod schemas (from validate() calls). This works regardless of which Zod
- * version or bundle nodox itself uses — the schema instances in the registry
- * were created by the USER's zod, so their prototype IS the user's ZodType.
- */
 function _patchUserZodProtoFromRegistry() {
   if (_userZodProtoPatchApplied) return
-  // schemaRegistry (from validate.js) contains schemas registered via validate().
-  // These are always from the USER's zod, regardless of what version nodox bundles.
-  // _schemaRegistryArray may be empty if patchZodWithRegistry failed at startup.
   const sources = [
     ..._schemaRegistryArray.map(e => e.schema),
     ...[...schemaRegistry.values()].map(e => e?.rawSchema || e).filter(Boolean),
@@ -1003,18 +693,11 @@ function _patchUserZodProtoFromRegistry() {
 }
 
 export async function runDeferredDryRuns() {
-  // Patch the ESM z factory methods. Node.js keeps CJS and ESM module caches
-  // separate, so `require('zod')` (used at startup in initSchemaDetector) and
-  // `import { z } from 'zod'` (used by user route files) are different objects.
-  // initSchemaDetector only patched the CJS instance. This async patch picks up
-  // the ESM instance so schemas created with `import { z }` after this point are
-  // registered and their full schema (including optional fields) is available for
-  // toJsonSchema without needing the null-probe fallback.
   try {
     const esmMod = await import('zod')
     const esmZ = esmMod?.z || esmMod?.default?.z || (esmMod?.object ? esmMod : esmMod?.default)
     if (esmZ) patchZodWithRegistry(esmZ)
-  } catch { /* zod not installed in this project */ }
+  } catch {  }
 
   _patchUserZodProtoFromRegistry()
   for (const { method, path, handlers } of pendingDryRuns) {
@@ -1022,7 +705,6 @@ export async function runDeferredDryRuns() {
     if (success) {
       console.log(`\x1b[32m  ✓ nodox\x1b[0m \x1b[2mInferred schema for ${method} ${path}\x1b[0m`)
     } else {
-      // console.log(`\x1b[33m  ! nodox\x1b[0m \x1b[2mCould not infer schema for ${method} ${path}\x1b[0m`)
     }
   }
 
@@ -1030,17 +712,6 @@ export async function runDeferredDryRuns() {
   _dryRunStartupComplete = true
 }
 
-/**
- * Called when a real request body shape is observed for a route.
- * Only fills in slots where no better (higher-confidence) input schema exists.
- * Covers routes where the user does no explicit validation — observed from live traffic.
- *
- * @param {string} method
- * @param {string} path
- * @param {object} shape - Inferred JSON Schema shape of req.body
- * @param {'observed'} [confidence='observed']
- * @param {Function} [onUpdate]
- */
 export function onInputObserved(method, path, shape, confidence = 'observed', onUpdate) {
   const entry = getOrCreateSchema(method, path)
 
@@ -1056,20 +727,9 @@ export function onInputObserved(method, path, shape, confidence = 'observed', on
   }
 }
 
-/**
- * Called by response interceptor when a response shape is observed.
- * Never downgrades an existing higher-confidence output schema.
- *
- * @param {string} method
- * @param {string} path
- * @param {object} shape - JSON Schema for the response body
- * @param {'observed'|'inferred'} [confidence='observed']
- * @param {Function} [onUpdate] - Callback when schema is updated (for WebSocket broadcast)
- */
 export function onResponseObserved(method, path, shape, confidence = 'observed', onUpdate) {
   const entry = getOrCreateSchema(method, path)
 
-  // Never overwrite a higher-confidence output schema
   const existing = CONFIDENCE_ORDER[entry.outputConfidence] ?? 0
   const incoming = CONFIDENCE_ORDER[confidence] ?? 0
   if (incoming <= existing) return
@@ -1082,20 +742,10 @@ export function onResponseObserved(method, path, shape, confidence = 'observed',
   }
 }
 
-/**
- * Get schema info for a specific route.
- * @param {string} method
- * @param {string} path
- * @returns {RouteSchema|null}
- */
 export function getRouteSchema(method, path) {
   return routeSchemas.get(routeKey(method, path)) ?? null
 }
 
-/**
- * Get all route schemas as a plain object (for WebSocket sync).
- * @returns {object}
- */
 export function getAllSchemas() {
   const result = {}
   for (const [key, schema] of routeSchemas) {
@@ -1104,20 +754,10 @@ export function getAllSchemas() {
   return result
 }
 
-/**
- * Enrich an array of extracted routes with schema information.
- * @param {import('../extractor/route-extractor.js').ExtractedRoute[]} routes
- * @returns {import('../extractor/route-extractor.js').ExtractedRoute[]}
- */
 export function enrichRoutesWithSchemas(routes) {
   return routes.map(route => {
     let schema = getRouteSchema(route.method, route.path)
 
-    // Fallback: if no exact-key schema was found, scan raw cache entries using
-    // URL→template matching.  This handles parameterised routes where the cache
-    // stores concrete URLs (e.g. "GET:/api/users/123") but the route template is
-    // "GET:/api/users/:id".  Without this the entire Layer 4 cache is useless for
-    // any route that has path parameters.
     if (!schema && _rawCacheEntries) {
       const cacheEntry = _findMatchingCacheEntry(route.method, route.path)
       if (cacheEntry) {
@@ -1135,8 +775,6 @@ export function enrichRoutesWithSchemas(routes) {
       }
     }
 
-    // Infer auth type from middleware function names when no explicit auth was declared.
-    // Detects common patterns like `authenticate`, `jwtAuth`, `requireAuth`, etc.
     if (schema && !schema.auth && route.handlers?.length) {
       const inferred = _inferAuthFromHandlers(route.handlers)
       if (inferred) schema.auth = inferred
@@ -1147,8 +785,6 @@ export function enrichRoutesWithSchemas(routes) {
       hasValidator: schema?.inputConfidence === 'confirmed' || schema?.inputConfidence === 'inferred',
       schema: schema ?? null,
       version: _detectVersion(route.path),
-      // Exclude raw handler functions from the serialized route — they're only
-      // needed for retroactive schema detection and must not be sent over WebSocket.
       handlers: undefined,
     }
   })
@@ -1178,12 +814,4 @@ function _inferAuthFromHandlers(handlers) {
   return null
 }
 
-/**
- * Directly tag a parsed value in parsedValueToSchema.
- * Normally called internally by patched parse methods; exported for testing.
- *
- * @param {any} value - The validated/parsed output
- * @param {object} schema - The schema instance that produced it
- * @param {'zod'|'joi'|'yup'} library
- */
 export { tagParsedValue }

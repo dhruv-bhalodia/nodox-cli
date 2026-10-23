@@ -1,28 +1,7 @@
-/**
- * useNodoxSocket
- *
- * Manages the WebSocket connection to the nodox middleware server.
- *
- * Reconnection strategy: exponential backoff at 500ms, 1s, 2s, 4s, 8s (capped).
- * On FULL_STATE_SYNC: OVERWRITE state entirely (prevents ghost routes after restart).
- * On incremental updates: merge into existing state.
- */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
 const BACKOFF_STEPS = [500, 1000, 2000, 4000, 8000]
-
-/**
- * @typedef {Object} Route
- * @property {string} method
- * @property {string} path
- * @property {string[]} middlewareNames
- * @property {boolean} hasValidator
- */
-
-/**
- * @typedef {'connecting'|'connected'|'disconnected'|'reconnecting'} ConnectionStatus
- */
 
 export function useNodoxSocket() {
   const [routes, setRoutes] = useState([])
@@ -57,14 +36,11 @@ export function useNodoxSocket() {
 
         switch (msg.type) {
           case 'FULL_STATE_SYNC':
-            // OVERWRITE — never merge on full sync.
-            // This clears ghost routes from the previous server instance.
             setRoutes(msg.routes ?? [])
             setLastSync(msg.timestamp)
             break
 
           case 'route-added':
-            // Incremental — a new route was registered after startup
             setRoutes(prev => {
               const exists = prev.some(r => r.method === msg.route.method && r.path === msg.route.path)
               return exists ? prev : [...prev, msg.route]
@@ -72,7 +48,6 @@ export function useNodoxSocket() {
             break
 
           case 'schema-update':
-            // Phase 2: update schema for a specific route
             setRoutes(prev => prev.map(r =>
               r.method === msg.method && r.path === msg.path
                 ? { ...r, schema: msg.schema }
@@ -88,7 +63,6 @@ export function useNodoxSocket() {
             break
         }
       } catch {
-        // Ignore malformed messages
       }
     }
 
@@ -110,7 +84,6 @@ export function useNodoxSocket() {
     }
 
     ws.onerror = () => {
-      // onclose will handle reconnection — onerror always fires before onclose
     }
   }, [])
 

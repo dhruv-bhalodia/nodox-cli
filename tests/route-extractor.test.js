@@ -1,16 +1,8 @@
-/**
- * Route Extractor Tests
- *
- * Tests the core route extraction logic against real Express app instances.
- * We test against actual Express behavior — not mocks — because the internal
- * _router.stack API is what we depend on and mocks would give false confidence.
- */
 
 import express from 'express'
 import { extractRoutes, checkExpressCompatibility } from '../src/extractor/route-extractor.js'
 import { patchApp } from '../src/middleware/app-patcher.js'
 
-// Helper: create a minimal Express app with some routes
 function makeApp(setup) {
   const app = express()
   app.use(express.json())
@@ -18,10 +10,7 @@ function makeApp(setup) {
   return app
 }
 
-// Force Express to initialize its router by adding a dummy middleware
 function initRouter(app) {
-  // Express lazily initializes _router on first use.
-  // Accessing lazyrouter() triggers initialization.
   if (typeof app.lazyrouter === 'function') {
     app.lazyrouter()
   }
@@ -108,7 +97,6 @@ describe('extractRoutes', () => {
       a.get('/ping', (req, res) => res.json({ ok: true }))
     })
 
-    // Extract twice — simulates the debounced re-extraction
     const first = extractRoutes(app)
     const second = extractRoutes(app)
 
@@ -121,7 +109,7 @@ describe('extractRoutes', () => {
     const router = express.Router()
 
     router.get('/health', (req, res) => res.json({ ok: true }))
-    app.use('/', router) // This could naively produce //health
+    app.use('/', router)
 
     const routes = extractRoutes(app)
     const health = routes.find(r => r.path.includes('health'))
@@ -160,13 +148,8 @@ describe('extractRoutes', () => {
   })
 
   test('extracts routes from a mounted sub-app (express())', () => {
-    // When Express mounts a sub-app via app.use(), it wraps it in an internal
-    // `mounted_app` closure — making the sub-app unreachable from the layer at
-    // extraction time. patchApp tags the sub-app on the layer before the wrap,
-    // which is how nodox handles this in production (nodox(app) applies the
-    // patcher before any routes are registered).
     const app = express()
-    patchApp(app, {})  // simulate nodox early-init
+    patchApp(app, {})
 
     const subApp = express()
     subApp.get('/orders', (req, res) => res.json([]))
@@ -187,8 +170,6 @@ describe('extractRoutes', () => {
   })
 
   test('extracts routes from a nested sub-app within a router', () => {
-    // router.use() does NOT wrap sub-apps — the sub-app is the layer handle directly.
-    // This works without the patcher via the _router.stack fallback in walkStack.
     const app = express()
     const router = express.Router()
     const subApp = express()
@@ -208,7 +189,7 @@ describe('extractRoutes', () => {
 describe('checkExpressCompatibility', () => {
   test('returns compatible for a standard Express app', () => {
     const app = express()
-    app.use(express.json()) // triggers router initialization
+    app.use(express.json())
     const result = checkExpressCompatibility(app)
     expect(result.compatible).toBe(true)
   })

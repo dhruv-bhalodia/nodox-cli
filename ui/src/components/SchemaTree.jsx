@@ -1,9 +1,3 @@
-/**
- * SchemaTree — renders a JSON Schema object as an indented field tree.
- *
- * Handles: object, array, string, number, integer, boolean, null,
- *          anyOf, oneOf, allOf, $ref (flattened), enum, format.
- */
 
 const TYPE_COLORS = {
   string:  '#7dd3fc',
@@ -30,7 +24,6 @@ function FieldRow({ name, schema, depth = 0, required = false, isLast = true }) 
 
   if (!schema || typeof schema !== 'object') return null
 
-  // Resolve anyOf/oneOf to a union display
   const unionTypes = schema.anyOf || schema.oneOf
   if (unionTypes) {
     return (

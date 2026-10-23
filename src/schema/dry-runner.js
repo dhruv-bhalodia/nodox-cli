@@ -1,18 +1,3 @@
-/**
- * Dry Runner — Layer 3 of the 5-layer fallback strategy
- *
- * For each middleware function flagged by the source screener, executes it
- * with a carefully constructed mock request and response. During execution,
- * the Layer 1 schema patches intercept any .parse() / .safeParse() calls
- * and report back which schema was invoked — establishing a confirmed
- * schema → route mapping.
- *
- * The mock request uses an infinite Proxy that returns itself for any property access.
- * Also callable — calling it returns another infinite proxy.
- *
- * Timing: called once during the deferred startup tick, after all routes
- * have been registered. Under 1ms per route in practice.
- */
 
 import { AsyncLocalStorage } from 'async_hooks'
 import http from 'http'
@@ -22,13 +7,7 @@ import fs from 'fs'
 import cp from 'child_process'
 import { capturedSchemas } from './schema-patcher.js'
 
-/**
- * Side-effect blocker — prevents network calls and filesystem writes during dry-runs.
- * Uses AsyncLocalStorage to identify when execution is happening within a dry-run context.
- */
 const dryRunContext = new AsyncLocalStorage()
-
-// ── Side Effect Patching ─────────────────────────────────────────────────────
 
 const ABORT_ERROR_MESSAGE = '__NODOC_DRY_RUN_ABORT__'
 
@@ -36,14 +15,6 @@ function isDryRun() {
   return dryRunContext.getStore()?.active === true
 }
 
-/**
- * Called from the Zod prototype-level parse patch in schema-detector.js.
- * Records the schema instance that called parse() during a dry-run — covers
- * ESM module-level schemas that are not in _schemaRegistryArray because the
- * CJS and ESM z instances are separate objects (different bundles).
- * @param {object} schema - The Zod schema instance (this inside parse)
- * @param {string} library
- */
 export function markSchemaDetectedInDryRun(schema, library) {
   const store = dryRunContext.getStore()
   if (store?.active && !store.protoDetectedSchema) {
@@ -52,17 +23,11 @@ export function markSchemaDetectedInDryRun(schema, library) {
   }
 }
 
-/**
- * Patch Node.js core modules once at startup to block side effects globally
- * during dry-runs. The AsyncLocalStorage check ensures that real requests
- * flowing through the server at the same time are unaffected.
- */
 let _sideEffectPatchesApplied = false
 function applySideEffectPatches() {
   if (_sideEffectPatchesApplied) return
   _sideEffectPatchesApplied = true
 
-  // Block network calls (covers 99% of DB drivers)
   const patchNetwork = (mod) => {
     const orig = mod.request
     mod.request = function(...args) {
@@ -80,9 +45,6 @@ function applySideEffectPatches() {
   const origConnect = net.Socket.prototype.connect
   net.Socket.prototype.connect = function(...args) {
     if (isDryRun()) {
-      // Deliver error asynchronously so pg's event listeners (set up after socket.connect()
-      // returns) are in place when it fires. A synchronous throw skips pg-pool's cleanup
-      // callback, leaving ghost entries in _clients and exhausting the pool for real requests.
       process.nextTick(() =>
         this.destroy(Object.assign(
           new Error('Network connection blocked during nodox dry-run'),
@@ -94,7 +56,6 @@ function applySideEffectPatches() {
     return origConnect.apply(this, args)
   }
 
-  // Block filesystem writes
   const blockFs = (method) => {
     const orig = fs[method]
     if (typeof orig !== 'function') return
@@ -105,14 +66,12 @@ function applySideEffectPatches() {
       return orig.apply(this, args)
     }
     fs[method] = patched
-    // Also patch default export if it exists (common in Node ESM)
     if (fs.default && fs.default[method]) {
       fs.default[method] = patched
     }
   }
   ['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'mkdir', 'mkdirSync'].forEach(blockFs)
 
-  // Block child processes
   const blockCp = (method) => {
     const orig = cp[method]
     if (typeof orig !== 'function') return
@@ -126,45 +85,28 @@ function applySideEffectPatches() {
   ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'].forEach(blockCp)
 }
 
-/**
- * Create an infinite Proxy that returns itself for any property access.
- * Also callable — calling it returns another infinite proxy.
- *
- * Special cases:
- *   - .then / .catch / Symbol.toPrimitive: return undefined (prevents Promise wrapping)
- *   - 'string'/'number'/'boolean': return sensible primitives for schema parsing
- *
- * @param {object} [overrides] - Real values to serve for specific properties
- * @returns {Proxy}
- */
 export function createInfiniteProxy(overrides = {}) {
   function handler(target) {
     return {
       get(obj, prop) {
-        // Direct overrides take priority
         if (prop in overrides) return overrides[prop]
 
-        // These must return undefined — returning a proxy causes issues with
-        // Promise detection, Symbol iteration, and Jest matchers
         if (typeof prop === 'symbol') return undefined
         if (prop === 'then' || prop === 'catch' || prop === 'finally') return undefined
         if (prop === 'toJSON') return undefined
         if (prop === 'valueOf') return () => null
         if (prop === 'toString') return () => '[nodox mock]'
 
-        // For known object-level props, return simple values
-        // so schema validators can run without throwing type errors
         if (prop === 'constructor') return Object
         if (prop in obj) return obj[prop]
 
-        // Everything else: return another infinite proxy
         return createInfiniteProxy()
       },
       apply() {
         return createInfiniteProxy()
       },
       set() {
-        return true // Silently accept all property sets
+        return true
       },
     }
   }
@@ -173,43 +115,6 @@ export function createInfiniteProxy(overrides = {}) {
   return new Proxy(target, handler(target))
 }
 
-/**
- * @typedef {Object} DryRunResult
- * @property {object|null} schema - The detected schema instance, or null if none found
- * @property {'zod'|'joi'|'yup'|null} library
- * @property {object|null} zodError - A ZodError caught from an uncaught schema.parse() call.
- *   Present only when the schema wasn't pre-registered but threw during dry-run.
- *   Used by schema-detector to reconstruct an approximate schema from the error issues.
- * @property {object|null} jsonSchema - Converted JSON Schema if available
- */
-
-/**
- * Execute a flagged middleware function with a mock request to detect which
- * schema it validates against.
- *
- * Async: awaits the handler promise with a single event-loop tick of headroom
- * (setTimeout 0). This is enough for Promise.resolve() chains (common in
- * async middleware that validates before any real I/O), while being safe
- * against real network/db calls that always take longer than one tick.
- *
- * ZodError fallback: if a schema.parse() call throws and isn't caught inside
- * the handler, the error propagates here. We store it so the caller can
- * reconstruct an approximate JSON Schema from the validation issues.
- *
- * @param {Function} fn - The middleware to dry-run
- * @param {string} method - HTTP method (for mock req.method)
- * @returns {Promise<DryRunResult>}
- */
-/**
- * Create a "null probe" body Proxy used in the second dry-run pass.
- * Returns null for every string-keyed property access so that schema fields
- * (both required and optional) fail type validation and appear in the ZodError.
- * The `has` trap returns true so Zod's `key in input` check treats every key
- * as present (required for optional-field interception in Zod v4).
- * Fields that accept null (.nullable()) pass silently and will be missed —
- * this is an accepted limitation.
- * @returns {Proxy}
- */
 export function createNullProbeBody() {
   return new Proxy({}, {
     get(_, prop) {
@@ -226,15 +131,10 @@ export function createNullProbeBody() {
 export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefined) {
   applySideEffectPatches()
 
-  // Build a mock request that looks enough like a real one for validators to run
   const mockReq = createInfiniteProxy({
     body: bodyOverride !== undefined ? bodyOverride : {},
     params: {},
     query: {},
-    // Return real empty objects for cookie/session/locals so property access
-    // produces undefined instead of a truthy proxy. Without this, patterns like
-    // `if (!req.cookies?.refresh_token) schema.parse(req.body)` never reach
-    // parse() because the proxy is always truthy.
     cookies: {},
     session: {},
     locals: {},
@@ -250,11 +150,6 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
     },
   })
 
-  // Capture what the handler passes to res.json() / res.status(n).json().
-  // This lets us reconstruct a schema when the handler uses safeParse (which
-  // returns { success: false } instead of throwing) and the schema wasn't
-  // pre-registered — e.g. module-level ESM Zod schemas created before the
-  // deferred ESM patch fires.
   const _capturedJsonBodies = []
   const _captureBody = (body) => { try { _capturedJsonBodies.push(body) } catch {} }
   const _statusResult = createInfiniteProxy({ json: _captureBody, send: _captureBody })
@@ -264,9 +159,6 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
     status: () => _statusResult,
   })
   const mockNext = (err) => {
-    // Capture ZodErrors forwarded via next(err) — the most common Express error pattern:
-    // try { schema.parse(req.body) } catch (err) { next(err) }
-    // Without this, the ZodError is swallowed and schema detection fails entirely.
     if (!caughtZodError && Array.isArray(err?.issues) && err.issues.length > 0) {
       caughtZodError = err
     }
@@ -279,8 +171,6 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
   let _protoDetectedLibrary = null
   const patchedSchemas = new Map()
 
-  // Temporarily patch every known schema's parse methods to intercept the call.
-  // We'll know which schema was invoked by which patch fires.
   const schemasToWatch = getWatchableSchemas()
 
   for (const { schema, meta } of schemasToWatch) {
@@ -294,23 +184,16 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
   }
 
   try {
-    // Wrap handler execution in the dry-run context.
-    // Store is an object so proto-level patches can write detected schema back
-    // via markSchemaDetectedInDryRun() while still inside the async context.
     await dryRunContext.run({ active: true, protoDetectedSchema: null, protoDetectedLibrary: null }, async () => {
       const maybePromise = fn(mockReq, mockRes, mockNext)
 
       if (maybePromise && typeof maybePromise.then === 'function') {
-        // Await with a single-tick timeout so validation that happens after a
-        // shallow await (Promise.resolve / already-resolved promise) is detected.
-        // Real I/O (network, disk) always takes longer than one tick — safe to skip.
         await new Promise(resolve => {
           const t = setTimeout(resolve, 0)
           maybePromise.then(
             () => { clearTimeout(t); resolve() },
             (err) => {
               clearTimeout(t)
-              // Async validator threw — capture ZodError if present
               if (!caughtZodError && Array.isArray(err?.issues) && err.issues.length > 0) {
                 caughtZodError = err
               }
@@ -320,31 +203,23 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
         })
       }
 
-      // Capture proto-detected schema while still inside the async context
-      // (dryRunContext.getStore() returns null outside the run() callback).
       const store = dryRunContext.getStore()
       _protoDetectedSchema = store?.protoDetectedSchema ?? null
       _protoDetectedLibrary = store?.protoDetectedLibrary ?? null
     })
   } catch (err) {
     if (err.message === ABORT_ERROR_MESSAGE) {
-      // Success: we captured the schema and aborted the handler before side effects
     } else if (!detectedSchema && Array.isArray(err?.issues) && err.issues.length > 0) {
-      // Sync schema.parse() without try/catch throws here — capture ZodError
       caughtZodError = err
     }
   }
 
-  // Restore all patched methods
   for (const [schema, patches] of patchedSchemas) {
     for (const [method, original] of Object.entries(patches)) {
       try { schema[method] = original } catch {}
     }
   }
 
-  // Fallback for safeParse patterns: the handler caught the validation error
-  // internally and forwarded it to res.json(). Extract Zod issues from the
-  // captured response body so _reconstructSchemaFromZodError can run.
   if (!detectedSchema && !caughtZodError) {
     for (const body of _capturedJsonBodies) {
       const issues = _extractZodIssues(body)
@@ -355,11 +230,6 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
     }
   }
 
-  // Proto-level fallback: covers ESM module-level schemas not in _schemaRegistryArray
-  // (CJS and ESM z are separate bundle instances — patching CJS z.object doesn't
-  // register schemas created with ESM z). The prototype patch in schema-detector.js
-  // intercepts ANY parse call on the ESM ZodType prototype, including all-optional
-  // schemas where parse({}) succeeds and no ZodError is thrown.
   if (!detectedSchema && _protoDetectedSchema) {
     detectedSchema = _protoDetectedSchema
     detectedLibrary = _protoDetectedLibrary || 'zod'
@@ -369,21 +239,13 @@ export async function dryRunValidator(fn, method = 'POST', bodyOverride = undefi
     schema: detectedSchema,
     library: detectedLibrary,
     zodError: caughtZodError,
-    jsonSchema: null, // Converted by schema-detector after dry run
+    jsonSchema: null,
   }
 }
 
-/**
- * Extract a Zod issues array from a response body, checking common shapes.
- * A Zod issue always has { path: Array, code: string, message: string }.
- * @param {any} body
- * @returns {Array|null}
- */
 function _extractZodIssues(body) {
   if (!body || typeof body !== 'object') return null
 
-  // Check common response shapes: { issues }, { details }, { errors },
-  // { validationErrors }, { error: { issues } }
   const candidates = [
     body.issues,
     body.details,
@@ -405,20 +267,12 @@ function _extractZodIssues(body) {
   return null
 }
 
-/**
- * Patch a schema's parse/validate methods to intercept calls during dry run.
- * Returns the original methods so they can be restored afterward.
- * @param {object} schema
- * @param {object} meta
- * @param {Function} onDetected
- * @returns {object|null} Map of method name → original function
- */
 function patchSchemaForDryRun(schema, meta, onDetected) {
   const originals = {}
   const methodsToWatch = meta.type === 'zod'
     ? ['parse', 'safeParse', 'parseAsync', 'safeParseAsync']
     : meta.type === 'yup'
-      ? ['validateSync']   // yup sync — async validate() would suspend before detection
+      ? ['validateSync']
       : ['validate', 'validateAsync']
 
   let patched = false
@@ -428,12 +282,8 @@ function patchSchemaForDryRun(schema, meta, onDetected) {
     originals[method] = schema[method]
     schema[method] = function interceptedParse(...args) {
       onDetected(schema, meta.type)
-      // Restore immediately — we only need the first call
       schema[method] = originals[method]
-      
-      // If we are in a dry-run context, throw immediately to abort the rest
-      // of the handler execution. This prevents any side effects (DB calls, logs)
-      // that appear after the validator in the function body.
+
       if (isDryRun()) {
         throw new Error(ABORT_ERROR_MESSAGE)
       }
@@ -446,23 +296,10 @@ function patchSchemaForDryRun(schema, meta, onDetected) {
   return patched ? originals : null
 }
 
-/**
- * Get all schemas currently in the captured registry as watchable objects.
- * Falls back to empty array if capturedSchemas registry is empty
- * (e.g. if schema patcher wasn't installed or no schemas were created yet).
- *
- * Note: WeakMap has no iterator, so we use the parallel tracking set.
- * @returns {Array<{schema: object, meta: object}>}
- */
 function getWatchableSchemas() {
-  // Import the tracking set from schema-patcher
-  // We use a module-level registry array here instead
   return _schemaRegistryArray
 }
 
-// Module-level array that schema-patcher populates.
-// We use a FinalizationRegistry to ensure that if a schema instance is
-// garbage collected, it is also removed from this array, preventing memory leaks.
 export const _schemaRegistryArray = []
 
 const registryCleanup = new FinalizationRegistry((schema) => {
@@ -470,20 +307,10 @@ const registryCleanup = new FinalizationRegistry((schema) => {
   if (index !== -1) _schemaRegistryArray.splice(index, 1)
 })
 
-/**
- * Register a schema for dry-run watching.
- * Called by the patched zod/joi methods.
- * @param {object} schema
- * @param {object} meta
- */
 export function registerForDryRun(schema, meta) {
   _schemaRegistryArray.push({ schema, meta })
-  // WeakRef would be better, but we need to iterate the actual objects for dry-run.
-  // We register the schema for cleanup when it is GC'd.
   try {
     registryCleanup.register(schema, schema)
   } catch {
-    // Some objects (like frozen ones) cannot be registered in FinalizationRegistry.
-    // In that case, we just leave it in the array — a rare edge case.
   }
 }

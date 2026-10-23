@@ -1,9 +1,3 @@
-/**
- * Schema Detector Tests
- *
- * Covers: prototype-level Zod tracking (chained schemas), onInputObserved
- * confidence ordering, yup mock detection, and async parse tracking.
- */
 
 import { z } from 'zod'
 import {
@@ -18,8 +12,6 @@ import {
   onRouteRegistered,
 } from '../src/schema/schema-detector.js'
 import { toJsonSchema } from '../src/schema/validate.js'
-
-// ─── tagParsedValue — core output-tracking primitive ──────────────────────
 
 describe('tagParsedValue', () => {
   test('stores JSON Schema in parsedValueToSchema for object values', () => {
@@ -42,7 +34,6 @@ describe('tagParsedValue', () => {
     tagParsedValue(d1, schema, 'zod')
     tagParsedValue(d2, schema, 'zod')
 
-    // Both should point to the same cached JSON Schema object
     expect(parsedValueToSchema.get(d1)).toBe(parsedValueToSchema.get(d2))
   })
 
@@ -54,14 +45,7 @@ describe('tagParsedValue', () => {
   })
 })
 
-// ─── Zod per-instance output tracking ─────────────────────────────────────
-// Note: Zod v4 uses a Module Namespace Object for `z` exports, which cannot
-// be monkey-patched. Per-instance patching requires intercepting factory methods.
-// In production, index.js patches z via async import('zod') at startup.
-// Here we test per-instance patching directly on a mutable fake z.
-
 describe('Zod per-instance output tracking via patchable z wrapper', () => {
-  // Create a mutable wrapper so factory methods can be patched
   const fakeZ = Object.fromEntries(
     Object.getOwnPropertyNames(z)
       .filter(k => typeof z[k] === 'function')
@@ -94,11 +78,9 @@ describe('Zod per-instance output tracking via patchable z wrapper', () => {
     const schema = fakeZ.object({ a: fakeZ.string(), b: fakeZ.number() })
     const d1 = schema.parse({ a: 'x', b: 1 })
     const d2 = schema.parse({ a: 'y', b: 2 })
-    expect(parsedValueToSchema.get(d1)).toBe(parsedValueToSchema.get(d2)) // same ref = cached
+    expect(parsedValueToSchema.get(d1)).toBe(parsedValueToSchema.get(d2))
   })
 })
-
-// ─── onInputObserved confidence ordering ──────────────────────────────────
 
 describe('onInputObserved', () => {
   const METHOD = 'POST'
@@ -117,7 +99,7 @@ describe('onInputObserved', () => {
     const shape1 = { type: 'object', properties: { a: { type: 'string' } } }
     const shape2 = { type: 'object', properties: { b: { type: 'number' } } }
     onInputObserved(METHOD, path, shape1)
-    onInputObserved(METHOD, path, shape2) // same confidence → no overwrite
+    onInputObserved(METHOD, path, shape2)
     expect(getRouteSchema(METHOD, path).input).toEqual(shape1)
   })
 
@@ -141,8 +123,6 @@ describe('onInputObserved', () => {
     expect(updates).toHaveLength(0)
   })
 })
-
-// ─── onResponseObserved confidence ordering ───────────────────────────────
 
 describe('onResponseObserved confidence ordering', () => {
   const METHOD = 'GET'
@@ -170,8 +150,6 @@ describe('onResponseObserved confidence ordering', () => {
   })
 })
 
-// ─── onQueryObserved ──────────────────────────────────────────────────────
-
 describe('onQueryObserved', () => {
   test('stores query schema with observed confidence', () => {
     const path = '/test-query-observed-' + Date.now()
@@ -187,7 +165,7 @@ describe('onQueryObserved', () => {
     const shape1 = { type: 'object', properties: { a: { type: 'string' } } }
     const shape2 = { type: 'object', properties: { b: { type: 'string' } } }
     onQueryObserved('GET', path, shape1)
-    onQueryObserved('GET', path, shape2)  // should be ignored
+    onQueryObserved('GET', path, shape2)
     expect(getRouteSchema('GET', path).querySchema).toEqual(shape1)
   })
 
@@ -198,8 +176,6 @@ describe('onQueryObserved', () => {
     expect(updates).toHaveLength(1)
   })
 })
-
-// ─── wasRouteRegistered ───────────────────────────────────────────────────
 
 describe('wasRouteRegistered', () => {
   test('returns false for routes not seen by onRouteRegistered', () => {
@@ -213,11 +189,7 @@ describe('wasRouteRegistered', () => {
   })
 })
 
-// ─── yup-like schema (duck-typed mock) ────────────────────────────────────
-
 describe('yup-like schema detection (duck-typed mock)', () => {
-  // We don't have yup installed, so we test with a mock that matches the duck-typing
-  // checks in detectSchemaLibrary and the JSON Schema converter.
 
   function makeMockYupSchema(type, fields) {
     return {

@@ -1,11 +1,3 @@
-/**
- * Layer 4 Integration Tests
- *
- * Tests the full pipeline:
- *   http interceptor → cache file → schema-detector loading → route enrichment
- *
- * Uses real HTTP servers, real file I/O, no mocks.
- */
 
 import http from 'http'
 import express from 'express'
@@ -24,13 +16,7 @@ function cleanup(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
 }
 
-// ── HTTP Interceptor simulation ───────────────────────────────────────────
-
 describe('http interceptor simulation', () => {
-  /**
-   * We test the interceptor logic directly (not via jest-setup.js which runs
-   * in a different process) by replicating the core capture mechanism.
-   */
 
   function buildInterceptor() {
     const exchanges = new Map()
@@ -183,8 +169,6 @@ describe('http interceptor simulation', () => {
   })
 
   test('merges shapes across multiple requests to same route', async () => {
-    // Second GET with extra field in response (simulate different data)
-    // We directly call mergeCacheEntry to test the merge logic
     const first = inferShape([{ id: 1, name: 'A' }])
     const second = inferShape([{ id: 2, name: 'B', tag: 'new' }])
 
@@ -199,22 +183,17 @@ describe('http interceptor simulation', () => {
     const props = cache.routes['GET:/api/products'].output.items.properties
     expect(props.id).toBeDefined()
     expect(props.name).toBeDefined()
-    expect(props.tag).toBeDefined() // merged in from second run
+    expect(props.tag).toBeDefined()
     expect(cache.routes['GET:/api/products'].seenCount).toBe(2)
   })
 
   test('does not capture external hostname requests', async () => {
-    // Simulate what happens with non-local hostname in the interceptor
-    // (We can't actually make external requests in tests, but we verify
-    //  the isLocal check works for known non-local hostnames)
     const LOCAL = new Set(['localhost', '127.0.0.1', '::1'])
     expect(LOCAL.has('api.example.com')).toBe(false)
     expect(LOCAL.has('localhost')).toBe(true)
     expect(LOCAL.has('127.0.0.1')).toBe(true)
   })
 })
-
-// ── loadCacheIntoRegistry ─────────────────────────────────────────────────
 
 describe('loadCacheIntoRegistry', () => {
   test('loads output schemas from cache file', () => {
@@ -283,14 +262,11 @@ describe('loadCacheIntoRegistry', () => {
   })
 })
 
-// ── Full pipeline: write cache → load at startup → enrich routes ──────────
-
 describe('full Layer 4 pipeline', () => {
   test('cache data appears in enriched route list', async () => {
     const dir = makeTmpDir()
     const file = path.join(dir, '.apicache.json')
 
-    // Simulate a previous test run that recorded this route
     writeCache(file, {
       routes: {
         'GET:/pipeline-test': {
@@ -310,10 +286,8 @@ describe('full Layer 4 pipeline', () => {
       }
     })
 
-    // Load into registry (simulates startup)
     loadCacheIntoRegistry(file)
 
-    // Verify schema is in registry
     const schema = getRouteSchema('GET', '/pipeline-test')
     expect(schema.output.properties.message).toBeDefined()
     expect(schema.output.properties.timestamp.format).toBe('date-time')

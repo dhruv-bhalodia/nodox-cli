@@ -1,6 +1,3 @@
-/**
- * Source Screener Tests — Layer 2
- */
 
 import { looksLikeValidator, flagValidatorsInHandlers } from '../src/schema/source-screener.js'
 
@@ -43,9 +40,6 @@ describe('looksLikeValidator', () => {
       const data = JSON.parse(req.body.rawJson)
       res.json(data)
     }
-    // JSON.parse(req.body.rawJson) — req.body is accessed but JSON.parse is not schema validation
-    // This may match; acceptable false-positive since dry-run is harmless, but we verify
-    // the screener does not throw
     expect(() => looksLikeValidator(handler)).not.toThrow()
   })
 
@@ -54,8 +48,6 @@ describe('looksLikeValidator', () => {
       const data = v.parse(UserSchema, req.body)
       res.json(data)
     }
-    // Valibot functional API: v.parse(schema, data) — not detectable via dry-run,
-    // so it's intentionally excluded from screening. Live observation handles it.
     expect(looksLikeValidator(handler)).toBe(false)
   })
 
@@ -118,10 +110,8 @@ describe('looksLikeValidator', () => {
   })
 
   test('handles minified source (long, no newlines) by returning false', () => {
-    // Simulate a minified function — long but no whitespace/newlines
     const src = 'function ' + 'x'.repeat(600) + '(a,b,c){}'
     const fn = new Function('return ' + src)()
-    // Even if it contains 'schema' buried in the name, it won't match validator patterns
     expect(() => looksLikeValidator(fn)).not.toThrow()
   })
 })

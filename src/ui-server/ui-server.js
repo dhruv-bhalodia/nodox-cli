@@ -1,12 +1,3 @@
-/**
- * UI Server
- *
- * Serves the built React UI at /__nodox.
- * The UI bundle is embedded in the package at dist/ui/.
- *
- * In development (when running from source), serves from ui/dist/.
- * In production (installed from npm), serves from dist/ui/.
- */
 
 import path from 'path'
 import fs from 'fs'
@@ -17,24 +8,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const _require = createRequire(import.meta.url)
 
 function _getExpressMajor(app) {
-  // Detect from the user's app instance — lazyrouter exists in Express 4, was
-  // removed in Express 5. Using require() here would resolve nodox's own express
-  // dependency, not the user's, so it would always return 4.
   if (app && typeof app.lazyrouter !== 'function') return 5
   return 4
 }
 
-/**
- * Find the UI dist directory.
- * Tries multiple locations to support both dev and installed scenarios.
- */
 function findUiDir() {
   const candidates = [
-    // Installed from npm, CJS bundle: __dirname = nodox-cli/dist/
     path.resolve(__dirname, '../ui/dist'),
-    // Installed from npm, ESM source: __dirname = nodox-cli/src/ui-server/
     path.resolve(__dirname, '../../ui/dist'),
-    // Running from source
     path.resolve(__dirname, './ui'),
     path.resolve(__dirname, '../ui'),
     path.resolve(__dirname, '../../dist/ui'),
@@ -49,16 +30,6 @@ function findUiDir() {
   return null
 }
 
-/**
- * Create a self-contained UI handler that can be called directly from middleware.
- * Used by the no-app code path (when app wasn't provided to nodox() at construction).
- *
- * @param {object} options
- * @param {string} [options.uiPath='/__nodox']
- * @param {Function} [options.getState] - returns current { routes } state for OpenAPI generation
- * @param {object} [options.info] - OpenAPI info overrides (title, version, description)
- * @returns {Function} Express-compatible (req, res, next) handler
- */
 export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
   const uiDir = findUiDir()
   const assetsPrefix = `${uiPath}/assets`
@@ -71,7 +42,6 @@ export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
 
     _applySecurityHeaders(res)
 
-    // OpenAPI JSON spec endpoint
     if (req.path === openApiPath) {
       const state = typeof getState === 'function' ? getState() : { routes: [] }
       const spec = buildOpenApiSpec(state.routes, req, { info })
@@ -80,7 +50,6 @@ export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
       return res.json(spec)
     }
 
-    // OpenAPI YAML spec endpoint
     if (req.path === openApiYamlPath) {
       const state = typeof getState === 'function' ? getState() : { routes: [] }
       const spec = buildOpenApiSpec(state.routes, req, { info })
@@ -89,7 +58,6 @@ export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
       return res.send(_toYaml(spec))
     }
 
-    // Per-route status endpoint — consumed by `npx nodox status`
     if (req.path === statusPath) {
       const state = typeof getState === 'function' ? getState() : { routes: [] }
       res.setHeader('Content-Type', 'application/json')
@@ -107,7 +75,6 @@ export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
       const filename = req.path.slice(assetsPrefix.length).replace(/^\//, '')
       const assetsDir = path.join(uiDir, 'assets')
       const filePath = path.resolve(assetsDir, filename)
-      // Use path.sep suffix so /assets-evil doesn't bypass a plain startsWith('/assets') check
       if (!filePath.startsWith(assetsDir + path.sep) && filePath !== assetsDir) {
         res.status(403).end(); return
       }
@@ -119,20 +86,9 @@ export function createUiHandler({ uiPath = '/__nodox', getState, info } = {}) {
   }
 }
 
-/**
- * Attach nodox UI routes to an Express app.
- * Serves the React SPA at /__nodox and all its assets.
- *
- * @param {import('express').Application} app
- * @param {object} options
- * @param {string} [options.uiPath='/__nodox'] - URL prefix for the UI
- * @param {Function} [options.getState] - returns current { routes } state for OpenAPI generation
- * @param {object} [options.info] - OpenAPI info overrides (title, version, description)
- */
 export function attachUiRoutes(app, { uiPath = '/__nodox', getState, info } = {}) {
   const uiDir = findUiDir()
 
-  // OpenAPI JSON spec endpoint — must be registered before the SPA catch-all
   app.get(`${uiPath}/openapi.json`, (req, res) => {
     _applySecurityHeaders(res)
     const state = typeof getState === 'function' ? getState() : { routes: [] }
@@ -142,7 +98,6 @@ export function attachUiRoutes(app, { uiPath = '/__nodox', getState, info } = {}
     res.json(spec)
   })
 
-  // OpenAPI YAML spec endpoint
   app.get(`${uiPath}/openapi.yaml`, (req, res) => {
     _applySecurityHeaders(res)
     const state = typeof getState === 'function' ? getState() : { routes: [] }
@@ -152,7 +107,6 @@ export function attachUiRoutes(app, { uiPath = '/__nodox', getState, info } = {}
     res.send(_toYaml(spec))
   })
 
-  // Per-route status endpoint — consumed by `npx nodox status`
   app.get(`${uiPath}/status.json`, (req, res) => {
     _applySecurityHeaders(res)
     const state = typeof getState === 'function' ? getState() : { routes: [] }
@@ -169,28 +123,19 @@ export function attachUiRoutes(app, { uiPath = '/__nodox', getState, info } = {}
     return
   }
 
-  // Serve static assets (JS chunks, CSS, icons)
-  // Must come before the SPA catch-all
   app.use(`${uiPath}/assets`, (req, res, next) => {
     _applySecurityHeaders(res)
     createStaticHandler(path.join(uiDir, 'assets'))(req, res, next)
   })
 
-  // SPA catch-all: every /__nodox/* request serves index.html
-  // The React router handles client-side navigation
   _registerCatchAll(app, uiPath, (req, res) => {
     _applySecurityHeaders(res)
     _serveIndexHtml(res, uiDir, uiPath)
   })
 }
 
-/** Cache patched HTML per uiPath to avoid re-reading on every request. */
 const _indexHtmlCache = new Map()
 
-/**
- * Serve index.html, rewriting the hardcoded /__nodox base path to the
- * configured uiPath so custom paths (e.g. /docs) load assets correctly.
- */
 function _serveIndexHtml(res, uiDir, uiPath) {
   let html = _indexHtmlCache.get(uiPath)
   if (!html) {
@@ -205,12 +150,6 @@ function _serveIndexHtml(res, uiDir, uiPath) {
   res.send(html)
 }
 
-/**
- * Apply security headers to all /__nodox responses.
- * CSP allows: scripts/styles from same origin, WebSocket to same origin,
- * inline styles (Vite injects some), data URIs for fonts/icons.
- * @param {import('http').ServerResponse} res
- */
 function _applySecurityHeaders(res) {
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
@@ -257,16 +196,10 @@ const MIME_TYPES = {
   '.woff': 'font/woff',
 }
 
-/**
- * Send a static asset file with appropriate headers.
- * @param {import('http').ServerResponse} res
- * @param {string} filePath - absolute path to the file
- */
 function _sendAsset(res, filePath) {
   const ext = path.extname(filePath)
   const filename = path.basename(filePath)
   res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream')
-  // Vite produces content-hashed filenames — safe to cache aggressively
   if (filename.match(/\.[a-f0-9]{8,}\./)) {
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
   } else {
@@ -275,19 +208,6 @@ function _sendAsset(res, filePath) {
   res.sendFile(filePath)
 }
 
-/**
- * Minimal static file handler — serves files from a directory.
- * @param {string} dir
- * @returns {Function} Express middleware
- */
-/**
- * Register the SPA catch-all route using the correct wildcard syntax for the
- * installed Express version.
- *   Express 4: bare * wildcard  — /__nodox*
- *   Express 5: named wildcard  — /__nodox and /__nodox/*path (two routes)
- * Using a string path (not RegExp) ensures the route extractor can filter it
- * out correctly via the startsWith('/__nodox') check.
- */
 function _registerCatchAll(app, uiPath, handler) {
   const major = _getExpressMajor(app)
   if (major >= 5) {
@@ -303,7 +223,6 @@ function createStaticHandler(dir) {
     const filename = req.path.replace(/^\/+/, '')
     const filePath = path.resolve(dir, filename)
 
-    // Use path.sep suffix so /assets-evil doesn't bypass a plain startsWith('/assets') check
     if (!filePath.startsWith(dir + path.sep) && filePath !== dir) { return res.status(403).end() }
     if (!fs.existsSync(filePath)) { return next() }
 
@@ -311,13 +230,6 @@ function createStaticHandler(dir) {
   }
 }
 
-// ── YAML serializer ──────────────────────────────────────────────────────────
-
-/**
- * Convert a JSON-compatible value to a YAML string.
- * Handles OpenAPI spec objects: strings, numbers, booleans, null, arrays, objects.
- * No anchors, multi-document, or binary — just what the spec needs.
- */
 function _toYaml(value, indent = 0) {
   const pad = '  '.repeat(indent)
   if (value === null || value === undefined) return 'null'
@@ -354,12 +266,6 @@ function _yamlStr(s) {
   return needsQuote ? JSON.stringify(s) : s
 }
 
-// ── Status payload ────────────────────────────────────────────────────────────
-
-/**
- * Build the payload for /__nodox/status.json — consumed by `npx nodox status`.
- * Returns per-route confidence levels so the CLI can show a rich coverage report.
- */
 function _buildStatusPayload(routes) {
   const items = (routes || [])
     .filter(r => r.path && !r.path.startsWith('/__nodox'))
@@ -373,15 +279,9 @@ function _buildStatusPayload(routes) {
   return { routes: items, generatedAt: new Date().toISOString() }
 }
 
-// ── OpenAPI spec generation ───────────────────────────────────────────────────
-
 const _BODY_METHODS = new Set(['post', 'put', 'patch'])
 const _PARAM_RE = /:([a-zA-Z_][a-zA-Z0-9_]*)/g
 
-/**
- * Derive a PascalCase component name from method + path + suffix.
- * e.g. POST /api/users/:id → "PostApiUsersByIdBody"
- */
 function _schemaName(method, path, suffix) {
   const parts = [method.charAt(0).toUpperCase() + method.slice(1).toLowerCase()]
   for (const seg of path.split('/').filter(Boolean)) {
@@ -394,7 +294,6 @@ function _schemaName(method, path, suffix) {
   return parts.join('') + suffix
 }
 
-/** JSON fingerprint with sorted keys for deduplication. Circular-reference safe. */
 function _fingerprint(schema) {
   try {
     const seen = new WeakSet()
@@ -409,16 +308,11 @@ function _fingerprint(schema) {
   } catch { return null }
 }
 
-/** True for schemas worth putting in components (object shapes, arrays with items). */
 function _isComplex(schema) {
   return schema && typeof schema === 'object' &&
     (schema.properties || schema.items?.properties || schema.anyOf?.length || schema.oneOf?.length || schema.allOf?.length)
 }
 
-/**
- * Register a schema in components/schemas and return a $ref, or return the schema inline
- * if it is too simple to bother registering.
- */
 function _asRef(schema, proposedName, components, fingerprints) {
   if (!_isComplex(schema)) return schema
   const fp = _fingerprint(schema)
@@ -433,14 +327,6 @@ function _asRef(schema, proposedName, components, fingerprints) {
   return { '$ref': `#/components/schemas/${name}` }
 }
 
-/**
- * Build an OpenAPI 3.1.0 spec object from the current route + schema state.
- * @param {object[]} routes - enriched routes from getState()
- * @param {import('http').IncomingMessage} req - used to derive server URL
- * @param {object} [opts]
- * @param {object} [opts.info] - overrides for the info block (title, version, description)
- * @returns {object} OpenAPI spec
- */
 function buildOpenApiSpec(routes, req, { info } = {}) {
   const host = req?.headers?.host || 'localhost'
   const isHttps = req?.connection?.encrypted ||
@@ -455,7 +341,6 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
   for (const route of (routes || [])) {
     if (!route.path || route.path.startsWith('/__nodox')) continue
 
-    // Convert Express :param segments → OpenAPI {param}
     const openApiPath = route.path.replace(_PARAM_RE, '{$1}')
 
     if (!paths[openApiPath]) paths[openApiPath] = {}
@@ -464,20 +349,17 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
     const schema = route.schema
     const operation = {}
 
-    // Tags — explicit tags take precedence; fall back to auto-detected API version
     if (schema?.tags?.length) {
       operation.tags = schema.tags
     } else if (route.version) {
       operation.tags = [route.version]
     }
 
-    // Metadata
     if (schema?.meta?.summary) operation.summary = schema.meta.summary
     if (schema?.meta?.description) operation.description = schema.meta.description
     if (schema?.meta?.deprecated === true) operation.deprecated = true
     if (schema?.externalDocs?.url) operation.externalDocs = schema.externalDocs
 
-    // Path parameters — extracted from the original Express path
     const pathParams = []
     _PARAM_RE.lastIndex = 0
     let m
@@ -485,7 +367,6 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
       pathParams.push({ name: m[1], in: 'path', required: true, schema: { type: 'string' } })
     }
 
-    // Query parameters — from querySchema (observed on GET/DELETE/HEAD/OPTIONS)
     const queryParams = []
     if (schema?.querySchema?.properties) {
       for (const [name, def] of Object.entries(schema.querySchema.properties)) {
@@ -496,7 +377,6 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
     const parameters = [...pathParams, ...queryParams]
     if (parameters.length) operation.parameters = parameters
 
-    // Request body — POST, PUT, PATCH only
     if (_BODY_METHODS.has(method) && schema?.input) {
       const bodyRef = _asRef(schema.input,
         _schemaName(method, route.path, 'Body'),
@@ -511,7 +391,6 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
       }
     }
 
-    // Responses — per-status map takes priority over single output schema
     const responses = {}
 
     if (schema?.outputByStatus) {
@@ -550,7 +429,6 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
 
     operation.responses = responses
 
-    // Auth → security on this operation + collect scheme for components
     if (schema?.auth) {
       const schemeResult = _buildSecurityScheme(schema.auth)
       if (schemeResult) {
@@ -591,11 +469,6 @@ function buildOpenApiSpec(routes, req, { info } = {}) {
   return spec
 }
 
-/**
- * Convert a nodox auth config to an [schemeName, OpenAPI Security Scheme] pair.
- * @param {{type: string, name?: string, in?: string, scopes?: string[], description?: string}} auth
- * @returns {[string, object]|null}
- */
 function _buildSecurityScheme(auth) {
   const desc = auth.description ? { description: auth.description } : {}
   switch (auth.type) {

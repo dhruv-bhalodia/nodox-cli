@@ -1,12 +1,7 @@
-/**
- * Dry Runner Tests — Layer 3
- * Tests the infinite proxy + schema interception mechanism.
- */
 
 import { z } from 'zod'
 import { createInfiniteProxy, dryRunValidator, registerForDryRun, _schemaRegistryArray } from '../src/schema/dry-runner.js'
 
-// Helper: register a schema manually (normally done by module patcher)
 function withRegistered(schema, meta, fn) {
   registerForDryRun(schema, meta)
   return fn()
@@ -35,7 +30,7 @@ describe('createInfiniteProxy', () => {
     const proxy = createInfiniteProxy()
     const nested = proxy.someUnknownProp
     expect(nested).toBeDefined()
-    expect(typeof nested).toBe('function') // proxies are function-based
+    expect(typeof nested).toBe('function')
   })
 
   test('is callable without throwing', () => {
@@ -69,7 +64,7 @@ describe('dryRunValidator', () => {
   test('blocks side effects (network and fs) during dry-run', async () => {
     const fs = (await import('fs')).default || await import('fs')
     const http = (await import('http')).default || await import('http')
-    
+
     let fsCalled = false
     let httpCalled = false
 
@@ -77,10 +72,8 @@ describe('dryRunValidator', () => {
     registerForDryRun(schema, { type: 'zod' })
 
     const handler = (req, res, next) => {
-      // validator is called first
       schema.parse(req.body)
 
-      // These should be blocked and the function should have aborted before reaching them
       try {
         fs.writeFileSync('test_nodox_temp.txt', 'hello')
         fsCalled = true
@@ -93,7 +86,7 @@ describe('dryRunValidator', () => {
     }
 
     const result = await dryRunValidator(handler)
-    
+
     expect(result.schema).toBe(schema)
     expect(fsCalled).toBe(false)
     expect(httpCalled).toBe(false)
@@ -108,7 +101,7 @@ describe('dryRunValidator', () => {
         cp.execSync('ls')
         cpCalled = true
       } catch {}
-      
+
       const schema = z.object({ id: z.string() })
       registerForDryRun(schema, { type: 'zod' })
       schema.parse(req.body)
@@ -123,14 +116,12 @@ describe('dryRunValidator', () => {
     let fsCalled = false
 
     const handler = (req, res, next) => {
-      // Side effect BEFORE validation
       try {
         fs.writeFileSync('test_nodox_temp_2.txt', 'hello')
         fsCalled = true
       } catch (e) {
-        // console.log('--- Blocked as expected:', e.message)
       }
-      
+
       const schema = z.object({ age: z.number() })
       registerForDryRun(schema, { type: 'zod' })
       schema.parse(req.body)
@@ -145,7 +136,7 @@ describe('dryRunValidator', () => {
     registerForDryRun(schema, { type: 'zod' })
 
     function strictValidator(req, res, next) {
-      req.body = schema.parse(req.body) // throws on invalid — we catch it
+      req.body = schema.parse(req.body)
       next()
     }
 
@@ -185,7 +176,6 @@ describe('dryRunValidator', () => {
 
     await dryRunValidator(validator, 'POST')
 
-    // After dry run, schema should still work normally
     const result = schema.safeParse({ x: 'hello' })
     expect(result.success).toBe(true)
   })
@@ -197,7 +187,6 @@ describe('dryRunValidator', () => {
     registerForDryRun(schemaB, { type: 'zod' })
 
     function multiValidator(req, res, next) {
-      // Uses schemaA first
       const r = schemaA.safeParse(req.body)
       if (r.success) schemaB.safeParse(r.data)
       next()

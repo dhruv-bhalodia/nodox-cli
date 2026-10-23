@@ -1,9 +1,3 @@
-/**
- * CLI Tests
- *
- * Tests for npx nodox init / prune / status commands.
- * Tests the helper functions directly — we don't shell out to the CLI binary.
- */
 
 import fs from 'fs'
 import path from 'path'
@@ -17,10 +11,7 @@ function cleanup(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
 }
 
-// ── Test runner detection ─────────────────────────────────────────────────
-
 describe('test runner detection', () => {
-  // We replicate detectTestRunner logic here so we can test it in isolation
   function detectTestRunner(cwd) {
     const jestConfigs = [
       'jest.config.js', 'jest.config.ts', 'jest.config.mjs',
@@ -98,8 +89,6 @@ describe('test runner detection', () => {
   })
 })
 
-// ── Config injection ──────────────────────────────────────────────────────
-
 describe('config injection (injectIntoExport)', () => {
   function injectIntoExport(content, lineToInject) {
     const openMatch = content.match(/(export\s+default\s*\{|module\.exports\s*=\s*\{|defineConfig\s*\(\s*\{)/)
@@ -140,7 +129,6 @@ describe('config injection (injectIntoExport)', () => {
   test('adds comma before injected line when last entry has no trailing comma', () => {
     const content = `export default {\n  testEnvironment: 'node'\n}`
     const result = injectIntoExport(content, "  setupFiles: ['nodox-cli/jest-setup'],")
-    // Should have comma after testEnvironment line
     expect(result).toContain("'node',")
   })
 
@@ -153,14 +141,11 @@ describe('config injection (injectIntoExport)', () => {
   test('produces valid structure after injection', () => {
     const content = `export default {\n  testEnvironment: 'node',\n  transform: {},\n}`
     const result = injectIntoExport(content, "  setupFiles: ['nodox-cli/jest-setup'],")
-    // Verify brace balance
     const opens  = (result.match(/\{/g) || []).length
     const closes = (result.match(/\}/g) || []).length
     expect(opens).toBe(closes)
   })
 })
-
-// ── setupFiles already present check ─────────────────────────────────────
 
 describe('alreadyPresent detection', () => {
   function injectSetupFile(content, setupEntry) {
@@ -169,7 +154,6 @@ describe('alreadyPresent detection', () => {
       const updated = content.replace(/setupFiles\s*:\s*\[/, `setupFiles: ['${setupEntry}', `)
       return { content: updated, alreadyPresent: false }
     }
-    // fallback to injectIntoExport (simplified)
     return { content: content + `\n  setupFiles: ['${setupEntry}'],`, alreadyPresent: false }
   }
 
@@ -194,14 +178,12 @@ describe('alreadyPresent detection', () => {
   })
 })
 
-// ── gitignore management ──────────────────────────────────────────────────
-
 describe('gitignore management', () => {
   function ensureGitignore(cwd) {
     const gitignorePath = path.join(cwd, '.gitignore')
     if (!fs.existsSync(gitignorePath)) return false
     const content = fs.readFileSync(gitignorePath, 'utf8')
-    if (content.includes('.apicache.json')) return false // already there
+    if (content.includes('.apicache.json')) return false
     fs.appendFileSync(gitignorePath, '\n# nodox schema cache\n.apicache.json\n')
     return true
   }
@@ -236,8 +218,6 @@ describe('gitignore management', () => {
   })
 })
 
-// ── prune command ─────────────────────────────────────────────────────────
-
 describe('prune command', () => {
   test('wipes routes from cache file', () => {
     const dir = makeTmpDir()
@@ -265,8 +245,6 @@ describe('prune command', () => {
     cleanup(dir)
   })
 })
-
-// ── status command ────────────────────────────────────────────────────────
 
 describe('status command data', () => {
   test('getCacheStats returns correct counts', async () => {

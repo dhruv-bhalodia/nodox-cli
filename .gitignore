@@ -8,3 +8,5 @@ npm-debug.log*
 coverage/
 nodox-snapshot.json
 scripts/*.sh
+walkthrough/
+demo/

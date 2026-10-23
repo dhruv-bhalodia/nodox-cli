@@ -6,10 +6,7 @@ import { Playground } from './components/Playground'
 import { version } from '../../package.json'
 import './styles.css'
 
-// Lazy-load the chain builder — only fetches the React Flow chunk when the Chain tab opens
 const ChainBuilder = lazy(() => import('./components/ChainBuilder'))
-
-// ── Tour ──────────────────────────────────────────────────────────────────────
 
 const TOUR_STEPS = [
   {
@@ -53,18 +50,14 @@ function Tour({ step, routes, selectedRoute, onSelectRoute, setView, onNext, onP
   const isLast  = step === total - 1
 
   useEffect(() => {
-    // Remove any previous highlight
     document.querySelectorAll('.tour-target').forEach(el => el.classList.remove('tour-target'))
 
-    // Switch view based on step
     setView(s.needsChain ? 'chain' : 'routes')
 
-    // Auto-select first route for steps that need a route visible
     if (s.needsRoute && !selectedRoute && routes.length > 0) {
       onSelectRoute(routes[0])
     }
 
-    // Highlight target element — defer so the view has time to render
     const t = setTimeout(() => {
       if (s.target) {
         const el = document.querySelector(s.target)
@@ -79,7 +72,7 @@ function Tour({ step, routes, selectedRoute, onSelectRoute, setView, onNext, onP
       clearTimeout(t)
       document.querySelectorAll('.tour-target').forEach(el => el.classList.remove('tour-target'))
     }
-  }, [step])  // eslint-disable-line
+  }, [step])
 
   return createPortal(
     <div className="tour-card" key={step}>
@@ -193,9 +186,6 @@ function EmptyState({ status }) {
   )
 }
 
-// ── Inline markdown renderer ──────────────────────────────────────────────────
-// Handles bold, italic, inline code, and links. No external dependency needed.
-
 function MarkdownText({ text }) {
   if (!text) return null
   const escaped = text
@@ -210,8 +200,6 @@ function MarkdownText({ text }) {
     .replace(/\n/g, '<br>')
   return <span dangerouslySetInnerHTML={{ __html: html }} />
 }
-
-// ── Environment switcher ──────────────────────────────────────────────────────
 
 function EnvSwitcher({ baseUrl, onChange }) {
   return (
@@ -228,8 +216,6 @@ function EnvSwitcher({ baseUrl, onChange }) {
     </div>
   )
 }
-
-// ── Route detail panel ────────────────────────────────────────────────────────
 
 const DETAIL_TABS = ['Playground', 'Schema']
 
@@ -259,7 +245,7 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
 
   return (
     <div className="detail-panel">
-      {/* Header */}
+      {}
       <div className="detail-panel__header">
         <div className="detail-panel__header-row">
           <MethodBadge method={route.method} />
@@ -288,7 +274,7 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
         )}
       </div>
 
-      {/* Middleware chain */}
+      {}
       {route.middlewareNames?.length > 0 && (
         <div className="detail-panel__section">
           <div className="detail-panel__section-title">Middleware chain</div>
@@ -303,7 +289,7 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
         </div>
       )}
 
-      {/* Tabs */}
+      {}
       <div className="detail-tabs">
         {DETAIL_TABS.map(t => (
           <button
@@ -316,10 +302,10 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
         ))}
       </div>
 
-      {/* Schema tab */}
+      {}
       {tab === 'Schema' && (
         <div className="detail-panel__section">
-          {/* Auth info block */}
+          {}
           {auth && (
             <div className="auth-info">
               <div className="auth-info__title">Authentication</div>
@@ -356,7 +342,7 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
             confidence={inputConf !== 'none' ? inputConf : undefined}
           />
 
-          {/* Body example */}
+          {}
           {meta?.examples?.body && (
             <div style={{ marginTop: 16 }}>
               <div className="example-label">Body example</div>
@@ -411,7 +397,7 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
         </div>
       )}
 
-      {/* Playground tab */}
+      {}
       {tab === 'Playground' && (
         <div className="detail-panel__section detail-panel__section--flush">
           <Playground route={route} baseUrl={baseUrl} cache={playgroundCache} />
@@ -420,8 +406,6 @@ function RouteDetail({ route, baseUrl, playgroundCache }) {
     </div>
   )
 }
-
-// ── PR Badge Banner ───────────────────────────────────────────────────────────
 
 const PR_BADGE_MARKDOWN = `## API Documentation
 
@@ -449,15 +433,13 @@ function PrBadgeBanner() {
   )
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
-
 export default function App() {
   const { routes, status, lastSync } = useNodoxSocket()
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [filter, setFilter] = useState('')
   const [methodFilter, setMethodFilter] = useState('ALL')
   const [versionFilter, setVersionFilter] = useState('ALL')
-  const [view, setView] = useState('routes') // 'routes' | 'chain'
+  const [view, setView] = useState('routes')
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('nodox-theme') || 'dark' } catch { return 'dark' }
   })
@@ -468,12 +450,9 @@ export default function App() {
     try { return localStorage.getItem('nodox-tour-done') ? -1 : 0 } catch { return 0 }
   })
   const [chainAddRequest, setChainAddRequest] = useState(null)
-  // Persist ChainBuilder state (nodes/edges/simOpen) across Routes↔Chain tab switches.
-  // ChainBuilder writes here on unmount; reads it as initialState on remount.
   const chainSavedState = useRef(null)
   const handleChainStateChange = useCallback((state) => { chainSavedState.current = state }, [])
   const playgroundCache = useRef({})
-  // Snapshot of state before tour started, used to restore on finish
   const tourSavedState = useRef(null)
 
   function handleBaseUrlChange(url) {
@@ -487,15 +466,12 @@ export default function App() {
     try { localStorage.setItem('nodox-theme', next) } catch {}
   }
 
-  // Apply theme to root element
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
   function startTour() {
-    // Snapshot current state so we can restore it when the tour ends
     tourSavedState.current = { view, selectedRoute }
-    // Reset to clean state: routes view, first route selected
     setView('routes')
     setSelectedRoute(routes[0] ?? null)
     setTourStep(0)
@@ -504,7 +480,6 @@ export default function App() {
   function dismissTour() {
     setTourStep(-1)
     try { localStorage.setItem('nodox-tour-done', '1') } catch {}
-    // Restore pre-tour state
     if (tourSavedState.current) {
       setView(tourSavedState.current.view)
       setSelectedRoute(tourSavedState.current.selectedRoute)
@@ -529,8 +504,6 @@ export default function App() {
     return matchMethod && matchVersion && matchPath
   }), [routes, filter, methodFilter, versionFilter])
 
-  // Group routes by tag when any route has tags declared via validate().
-  // Fall back to grouping by API version when multiple versions are detected but no tags.
   const groupedRoutes = useMemo(() => {
     const hasAnyTags = filtered.some(r => r.schema?.tags?.length)
 
@@ -553,7 +526,6 @@ export default function App() {
       return result
     }
 
-    // Version-based grouping (only when multiple versions present and not filtered to one)
     const hasMultipleVersions = versions.length > 1 && versionFilter === 'ALL'
     if (hasMultipleVersions) {
       const groups = new Map()
@@ -580,7 +552,7 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* Sidebar */}
+      {}
       <aside className="sidebar">
         <div className="sidebar__header">
           <div className="sidebar__logo">
@@ -740,7 +712,7 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main */}
+      {}
       <main className={`main ${view === 'chain' ? 'main--chain' : ''}`}>
         {view === 'chain' ? (
           <Suspense fallback={<div className="chain-loading"><div className="empty-state__spinner" /><p>Loading chain builder…</p></div>}>
@@ -757,7 +729,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Tour overlay */}
+      {}
       {tourStep >= 0 && (
         <Tour
           step={tourStep}

@@ -1,28 +1,8 @@
-/**
- * Playground — send live HTTP requests directly from the nodox UI.
- *
- * Builds the request from:
- *   - Method + path from the selected route
- *   - Path params extracted from route (e.g. :id)
- *   - Query params (key/value editor)
- *   - Headers (key/value editor)
- *   - Body (JSON editor, shown for POST/PUT/PATCH)
- *
- * Response is shown with: status code, status text, timing, pretty-printed body.
- *
- * Schema diffing: save a response as baseline, then compare against subsequent responses.
- */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH'])
 
-// ── Schema helpers ────────────────────────────────────────────────────────────
-
-/**
- * Extract flat field descriptors from a JSON Schema object.
- * Returns null if the schema has no usable properties.
- */
 function getSchemaFields(schema) {
   if (!schema || schema.type !== 'object' || !schema.properties) return null
   const required = new Set(Array.isArray(schema.required) ? schema.required : [])
@@ -33,10 +13,6 @@ function getSchemaFields(schema) {
   }))
 }
 
-/**
- * Parse a string value according to the expected JSON Schema type.
- * Falls back to the raw string if coercion is not possible.
- */
 function parseFieldValue(value, type) {
   if (value === '') return ''
   if (type === 'number' || type === 'integer') {
@@ -124,8 +100,6 @@ function StatusBadge({ status }) {
   )
 }
 
-// ── Schema diff helpers ───────────────────────────────────────────────────────
-
 function computeDiff(a, b, prefix = '') {
   const rows = []
 
@@ -210,8 +184,6 @@ function DiffView({ baseline, current }) {
   )
 }
 
-// ── Code snippet generators ───────────────────────────────────────────────────
-
 function buildSnippets(method, url, headers, bodyStr) {
   const headerLines = Object.entries(headers)
     .filter(([k]) => k)
@@ -275,8 +247,6 @@ function CodeSnippets({ method, url, headers, bodyStr }) {
   )
 }
 
-// ── Playground ────────────────────────────────────────────────────────────────
-
 export function Playground({ route, baseUrl = '', cache }) {
   const routeKey = `${route.method}:${route.path}`
   const cached = cache?.current?.[routeKey]
@@ -285,7 +255,6 @@ export function Playground({ route, baseUrl = '', cache }) {
   const showBody = BODY_METHODS.has(route.method)
   const [showSnippets, setShowSnippets] = useState(false)
 
-  // Derive schema fields once — used to decide which body editor to show
   const schemaFields = showBody ? getSchemaFields(route.schema?.input) : null
 
   const [pathValues, setPathValues] = useState(
@@ -294,13 +263,11 @@ export function Playground({ route, baseUrl = '', cache }) {
   const [queryParams, setQueryParams] = useState(cached?.queryParams ?? [{ key: '', value: '' }])
   const [headers, setHeaders] = useState(cached?.headers ?? [{ key: 'Content-Type', value: 'application/json' }])
 
-  // Schema-based body: pre-filled key rows, user only fills values
   const [bodyFields, setBodyFields] = useState(
     cached?.bodyFields ?? (schemaFields
       ? schemaFields.map(f => ({ key: f.key, value: '', type: f.type, required: f.required }))
       : [])
   )
-  // Raw JSON body fallback (when no schema)
   const [body, setBody] = useState(cached?.body ?? '')
   const [bodyError, setBodyError] = useState(null)
 
@@ -309,7 +276,6 @@ export function Playground({ route, baseUrl = '', cache }) {
   const [elapsed, setElapsed] = useState(cached?.elapsed ?? null)
   const [baseline, setBaseline] = useState(cached?.baseline ?? null)
 
-  // Track latest state values for the unmount-save effect
   const stateRef = useRef({})
   stateRef.current = { pathValues, queryParams, headers, body, bodyFields, response, elapsed, baseline }
 
@@ -319,7 +285,6 @@ export function Playground({ route, baseUrl = '', cache }) {
         cache.current[routeKey] = { ...stateRef.current }
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeKey])
 
   const handleBodyChange = (val) => {
@@ -354,7 +319,6 @@ export function Playground({ route, baseUrl = '', cache }) {
 
       if (showBody) {
         if (bodyFields.length > 0) {
-          // Build JSON from schema-based key-value rows
           const obj = {}
           for (const f of bodyFields) {
             if (f.value !== '') {
@@ -394,7 +358,7 @@ export function Playground({ route, baseUrl = '', cache }) {
   return (
     <div className="playground">
 
-      {/* Baseline indicator */}
+      {}
       {baseline && (
         <div className="baseline-bar">
           <span className="baseline-bar__label">◆ Baseline saved — next response will be diffed</span>
@@ -402,7 +366,7 @@ export function Playground({ route, baseUrl = '', cache }) {
         </div>
       )}
 
-      {/* URL bar */}
+      {}
       <div className="playground__url-bar">
         <span className="playground__method">{route.method}</span>
         <div className="playground__url-parts">
@@ -436,7 +400,7 @@ export function Playground({ route, baseUrl = '', cache }) {
         </button>
       </div>
 
-      {/* Query params */}
+      {}
       <div className="playground__section">
         <KvEditor
           label="Query params"
@@ -445,7 +409,7 @@ export function Playground({ route, baseUrl = '', cache }) {
         />
       </div>
 
-      {/* Headers */}
+      {}
       <div className="playground__section">
         <KvEditor
           label="Headers"
@@ -454,7 +418,7 @@ export function Playground({ route, baseUrl = '', cache }) {
         />
       </div>
 
-      {/* Body editor */}
+      {}
       {showBody && (
         <div className="playground__section">
           <div className="playground__section-label">
@@ -521,7 +485,7 @@ export function Playground({ route, baseUrl = '', cache }) {
         </div>
       )}
 
-      {/* Code snippets */}
+      {}
       <div className="playground__section">
         <button
           className="playground__section-label code-snippets__toggle"
@@ -551,7 +515,7 @@ export function Playground({ route, baseUrl = '', cache }) {
         })()}
       </div>
 
-      {/* Response */}
+      {}
       {response && (
         <div className="playground__response">
           <div className="response__meta">
@@ -580,7 +544,7 @@ export function Playground({ route, baseUrl = '', cache }) {
               </pre>
           }
 
-          {/* Schema diff */}
+          {}
           {baseline && response.isJson && !response.error && (
             <DiffView baseline={baseline.body} current={response.body} />
           )}

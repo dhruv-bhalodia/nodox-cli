@@ -1,13 +1,3 @@
-/**
- * Integration Tests — nodox middleware end-to-end
- *
- * Boots a real Express server with nodox attached and verifies:
- *   - All routes are discovered correctly
- *   - The UI is served at /__nodox
- *   - WebSocket delivers FULL_STATE_SYNC with route data
- *   - validate() schemas are picked up immediately
- *   - Server passes through all non-nodox requests unchanged
- */
 
 import express from 'express'
 import http from 'http'
@@ -15,10 +5,6 @@ import { WebSocket, WebSocketServer } from 'ws'
 import nodox, { validate } from '../src/index.js'
 import { z } from 'zod'
 
-/**
- * Build a test Express app with nodox and a set of routes.
- * Returns the app + a started HTTP server.
- */
 async function buildTestApp(routeSetup) {
   const app = express()
   app.use(express.json())
@@ -27,9 +13,8 @@ async function buildTestApp(routeSetup) {
   if (routeSetup) routeSetup(app)
 
   const server = http.createServer(app)
-  await new Promise(resolve => server.listen(0, resolve)) // port 0 = random free port
+  await new Promise(resolve => server.listen(0, resolve))
 
-  // Wait for nodox's setTimeout(0) deferred extraction to run
   await new Promise(resolve => setTimeout(resolve, 100))
 
   return { app, server }
@@ -42,8 +27,6 @@ function getPort(server) {
 function cleanup(server) {
   return new Promise(resolve => server.close(resolve))
 }
-
-// ── Route discovery tests ────────────────────────────────────────────────────
 
 describe('route discovery via HTTP', () => {
   let server, app
@@ -77,7 +60,6 @@ describe('route discovery via HTTP', () => {
     const res = await fetch(`http://localhost:${port}/__nodox`)
     expect(res.status).toBe(200)
     const text = await res.text()
-    // Either the full UI or the placeholder — both are HTML
     expect(text).toContain('nodox')
   })
 
@@ -87,8 +69,6 @@ describe('route discovery via HTTP', () => {
     expect(res.status).toBe(404)
   })
 })
-
-// ── WebSocket state sync tests ────────────────────────────────────────────────
 
 describe('WebSocket FULL_STATE_SYNC', () => {
   let server
@@ -106,7 +86,6 @@ describe('WebSocket FULL_STATE_SYNC', () => {
   test('delivers FULL_STATE_SYNC with routes on connection', async () => {
     const port = getPort(server)
 
-    // Make one HTTP request first so nodox's middleware runs and attaches WebSocket
     await fetch(`http://localhost:${port}/ping`)
     await new Promise(r => setTimeout(r, 50))
 
@@ -179,8 +158,6 @@ describe('WebSocket FULL_STATE_SYNC', () => {
   })
 })
 
-// ── validate() schema integration tests ──────────────────────────────────────
-
 describe('validate() schema detection', () => {
   let server, app
 
@@ -228,7 +205,6 @@ describe('validate() schema detection', () => {
 
   test('WebSocket reports POST /users has schema confirmed', async () => {
     const port = getPort(server)
-    // Trigger middleware attach
     await fetch(`http://localhost:${port}/users`)
     await new Promise(r => setTimeout(r, 100))
 
@@ -252,8 +228,6 @@ describe('validate() schema detection', () => {
     expect(postUsers.schema.inputConfidence).toBe('confirmed')
   })
 })
-
-// ── Middleware transparency test ──────────────────────────────────────────────
 
 describe('middleware transparency', () => {
   let server
@@ -289,18 +263,9 @@ describe('middleware transparency', () => {
   test('response headers are not modified by nodox', async () => {
     const port = getPort(server)
     const res = await fetch(`http://localhost:${port}/hello`)
-    // nodox should not inject any custom headers into user responses
     expect(res.headers.get('x-nodox')).toBeNull()
   })
 })
-
-// ── Coexistence with a user-owned WebSocket server ────────────────────────────
-//
-// Reproduces the real-world failure (issue: graphql-ws on the same httpServer):
-// a user runs their own `new WebSocketServer({ server, path })` on the shared
-// HTTP server. Its 'upgrade' listener calls abortHandshake(socket, 400) for any
-// path it doesn't own — including '/__nodox_ws' — destroying nodox's handshake.
-// nodox must take over the 'upgrade' event so BOTH servers work.
 
 describe('coexistence with a user-owned WebSocket server', () => {
   let server, userWss
@@ -313,10 +278,6 @@ describe('coexistence with a user-owned WebSocket server', () => {
 
     server = http.createServer(app)
 
-    // graphql-ws / socket.io style: default { server } mode on its own path.
-    // Constructed before listen(), so its 'upgrade' listener is registered
-    // before nodox attaches on the first HTTP request — exactly the ordering
-    // that made the bug deterministic for the reporter.
     userWss = new WebSocketServer({ server, path: '/my-ws' })
     userWss.on('connection', (ws) => ws.send('user-ws-connected'))
 
@@ -331,7 +292,6 @@ describe('coexistence with a user-owned WebSocket server', () => {
 
   test('nodox /__nodox_ws still completes the handshake (not aborted by the user WS)', async () => {
     const port = getPort(server)
-    // First HTTP request so nodox attaches its dispatcher.
     await fetch(`http://localhost:${port}/ping`)
     await new Promise(r => setTimeout(r, 50))
 
@@ -364,13 +324,6 @@ describe('coexistence with a user-owned WebSocket server', () => {
   })
 })
 
-// ── Residual race: a WS server registered AFTER nodox already attached ─────────
-//
-// nodox captures existing 'upgrade' listeners when it attaches. A WS server
-// created lazily afterwards appends a new listener that would abort '/__nodox_ws'
-// again. The dispatcher self-heals by absorbing late listeners on the next
-// upgrade, so nodox stays the sole dispatcher.
-
 describe('coexistence with a WebSocket server added after nodox attaches', () => {
   let server, lateWss
 
@@ -385,11 +338,9 @@ describe('coexistence with a WebSocket server added after nodox attaches', () =>
     await new Promise(resolve => setTimeout(resolve, 100))
 
     const port = getPort(server)
-    // Make nodox attach FIRST (it captures zero foreign listeners here)...
     await fetch(`http://localhost:${port}/ping`)
     await new Promise(r => setTimeout(r, 50))
 
-    // ...THEN register a WS server, appending its 'upgrade' listener after ours.
     lateWss = new WebSocketServer({ server, path: '/late-ws' })
     lateWss.on('connection', (ws) => ws.send('late-ws-connected'))
   })
@@ -401,9 +352,6 @@ describe('coexistence with a WebSocket server added after nodox attaches', () =>
 
   test('nodox /__nodox_ws survives a late-registered WS server (self-heals)', async () => {
     const port = getPort(server)
-    // Two attempts: the very first upgrade after the late listener appears may be
-    // aborted by it (it is already subscribed for that emission); nodox absorbs it
-    // and the retry — exactly what the UI's reconnect does — succeeds.
     async function tryConnect() {
       return new Promise((resolve) => {
         const ws = new WebSocket(`ws://localhost:${port}/__nodox_ws`)
@@ -417,7 +365,7 @@ describe('coexistence with a WebSocket server added after nodox attaches', () =>
     }
 
     let msg = await tryConnect()
-    if (!msg) msg = await tryConnect() // reconnect after self-heal
+    if (!msg) msg = await tryConnect()
     expect(msg?.type).toBe('FULL_STATE_SYNC')
   })
 

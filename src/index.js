@@ -1,24 +1,3 @@
-/**
- * nodox — Main Entry Point
- *
- * Usage — minimal, one line:
- *
- *   app.use(nodox())          // app is optional — detected from req.app
- *   app.use(nodox(app))       // explicit app — enables Layer 2 source screening
- *
- * Full example:
- *
- *   import express from 'express'
- *   import nodox from 'nodox-cli'
- *
- *   const app = express()
- *   app.use(express.json())
- *   app.use(nodox())
- *
- *   app.get('/users', handler)
- *   app.listen(3000)
- *   // UI at http://localhost:3000/__nodox
- */
 
 import _path from 'path'
 import { patchApp } from './middleware/app-patcher.js'
@@ -44,24 +23,7 @@ import { findCacheFile } from './layer4/cache-reader.js'
 
 export { validate } from './schema/validate.js'
 
-/**
- * @typedef {Object} NodoxOptions
- * @property {string}  [uiPath='/__nodox']
- * @property {boolean} [log=true]
- * @property {boolean} [schema=true]
- * @property {boolean} [intercept=true]
- * @property {boolean} [force=false] - Allow nodox to run in production (opt-in)
- */
-
-/**
- * @param {import('express').Application|NodoxOptions} [appOrOptions]
- * @param {NodoxOptions} [options]
- * @returns {Function} Express middleware
- */
 export default function nodox(appOrOptions, options = {}) {
-  // Distinguish nodox(app, opts) vs nodox(opts) vs nodox()
-  // Express apps are functions (typeof === 'function'), not plain objects,
-  // so we check for the .use method to identify them rather than typeof === 'object'.
   let app = null
   if (appOrOptions && typeof appOrOptions.use === 'function') {
     app = appOrOptions
@@ -79,9 +41,6 @@ export default function nodox(appOrOptions, options = {}) {
     server: externalServer = null,
   } = options
 
-  // Production safety guard.
-  // nodox exposes all routes, schemas, and a request playground — never run in prod.
-  // Opt out with { force: true } only if you know what you're doing.
   if (process.env.NODE_ENV === 'production' && !force) {
     console.warn(
       '[nodox] Disabled in production (NODE_ENV=production).\n' +
@@ -90,23 +49,15 @@ export default function nodox(appOrOptions, options = {}) {
     return function nodoxDisabledMiddleware(_req, _res, next) { next() }
   }
 
-  /** @type {import('./extractor/route-extractor.js').ExtractedRoute[]} */
   let routes = []
-  /** @type {NodoxWebSocketServer|null} */
   let wsServer = null
   let serverAttached = false
   let extractionTimer = null
   let appInitDone = false
-  let portLogged = false // track whether we've logged the real URL yet
+  let portLogged = false
 
-  // Layer 1: patch zod/joi at module level (doesn't need app)
   if (schema) initSchemaDetector()
 
-  // Patch the user's ESM Zod prototype so dry-run can intercept all parse()
-  // calls including all-optional schemas. Must run before any runDeferredDryRuns()
-  // call regardless of which startup path is used (app.listen or server option).
-  // Resolves zod from the user's project root (process.argv[1]) so it finds their
-  // actual installed version, not nodox's own bundled copy.
   let _userZodEsmPatchPromise = null
   function ensureUserZodEsmPatched() {
     if (_userZodEsmPatchPromise) return _userZodEsmPatchPromise
@@ -120,7 +71,7 @@ export default function nodox(appOrOptions, options = {}) {
           ].filter(Boolean)
           const cjsPath = require.resolve('zod', { paths: searchPaths })
           zodEsmPath = cjsPath.replace(/index\.cjs$/, 'index.js')
-        } catch { /* zod not in user's project */ }
+        } catch {  }
         const zodMod = zodEsmPath
           ? await import(zodEsmPath).catch(() => null)
           : await import('zod').catch(() => null)
@@ -128,11 +79,6 @@ export default function nodox(appOrOptions, options = {}) {
           const z = zodMod?.z || zodMod?.default?.z || zodMod
           if (z) {
             patchZodWithRegistry(z)
-            // Explicitly patch ZodType.prototype even if patchZodWithRegistry
-            // was a no-op (guarded by _patchedZInstances when esmZ === cjsZ).
-            // patchZodProtoForOutputTracking is idempotent via __nodoxZodProtoPatched.
-            // This ensures _parseSync is intercepted for all-optional schemas
-            // on the { server: httpServer } path without requiring a validate() call.
             patchZodProtoForOutputTracking(z)
           }
         }
@@ -141,7 +87,6 @@ export default function nodox(appOrOptions, options = {}) {
     return _userZodEsmPatchPromise
   }
 
-  // Layer 4: load .apicache.json from previous test runs into registry (doesn't need app)
   const cacheCount = schema ? loadCacheIntoRegistry() : 0
 
   function scheduleExtraction() {
@@ -155,11 +100,6 @@ export default function nodox(appOrOptions, options = {}) {
     const raw = extractRoutes(app)
 
     if (schema) {
-      // Retroactively process routes that were registered before patchApp was
-      // applied — i.e., routes defined before nodox(app) was called. These never
-      // triggered onRouteRegistered so were never source-screened or dry-run.
-      // _dryRunStartupComplete is true by the time this runs at startup, so
-      // _dryRunRoute fires immediately (fire-and-forget, see onRouteRegistered).
       for (const route of raw) {
         if (!wasRouteRegistered(route.method, route.path) && route.handlers?.length) {
           schemaOnRouteRegistered(route.method, route.path, route.handlers)
@@ -175,7 +115,6 @@ export default function nodox(appOrOptions, options = {}) {
     if (portLogged) return
     portLogged = true
 
-    // Force extraction if it hasn't happened yet so the log is accurate
     if (routes.length === 0) {
       const raw = extractRoutes(app)
       if (schema) {
@@ -205,10 +144,6 @@ export default function nodox(appOrOptions, options = {}) {
 
   function getState() { return { routes } }
 
-  /**
-   * Run once with a known app reference — either at construction (early) or
-   * on first middleware call (late). Idempotent.
-   */
   function _initWithApp(theApp) {
     if (appInitDone) return
     appInitDone = true
@@ -217,7 +152,6 @@ export default function nodox(appOrOptions, options = {}) {
     const compat = checkExpressCompatibility(theApp)
     if (!compat.compatible) console.warn(compat.warning)
 
-    // Patch listen to capture the server and log the real port immediately
     if (typeof theApp.listen === 'function') {
       const originalListen = theApp.listen
       theApp.listen = function nodoxPatchedListen(...args) {
@@ -226,16 +160,13 @@ export default function nodox(appOrOptions, options = {}) {
           const addr = server.address()
           const port = typeof addr === 'string' ? addr : addr?.port
 
-          // Patch user's ESM Zod prototype, then run dry-runs
           if (schema) await ensureUserZodEsmPatched()
           if (schema) await runDeferredDryRuns()
 
-          // Re-enrich after dry-runs so logStartup sees the updated confidence levels
           if (schema && app) routes = enrichRoutesWithSchemas(extractRoutes(app))
 
           if (log && port && !portLogged) logStartup(port)
-          
-          // Proactively attach WebSocket as soon as the server is listening
+
           if (!serverAttached) {
             serverAttached = true
             wsServer = new NodoxWebSocketServer({ getState })
@@ -259,14 +190,9 @@ export default function nodox(appOrOptions, options = {}) {
     attachUiRoutes(theApp, { uiPath, getState, info })
   }
 
-  // Early init — only possible when app was passed to nodox()
   const wasEarlyInit = !!app
   if (wasEarlyInit) _initWithApp(app)
 
-  // External HTTP server support: nodox(app, { server: httpServer })
-  // Users who call http.createServer(app) + httpServer.listen() bypass the
-  // patched app.listen(), so the port and WebSocket would never be set up.
-  // Hooking into the external server's 'listening' event handles this case.
   if (externalServer) {
     const onListening = async () => {
       const addr = externalServer.address()
@@ -288,37 +214,25 @@ export default function nodox(appOrOptions, options = {}) {
     }
   }
 
-  // Deferred startup tick: dry-runs, initial extraction, startup log
   setTimeout(async () => {
     if (schema) {
       await ensureUserZodEsmPatched()
       await runDeferredDryRuns()
-      // Re-enrich after dry-runs so the UI sees correct schemas even when the user
-      // uses http.createServer(app) + server.listen() without passing { server }.
-      // The app.listen and externalServer paths already do this in their own handlers.
       if (app) routes = enrichRoutesWithSchemas(extractRoutes(app))
     }
     doExtraction()
 
     if (log) {
-      // Body-parser warning — app is always known here when wasEarlyInit is true
       if (app) _warnIfNoBodyParser(app)
 
-      // Hint if no .apicache.json exists yet
       if (schema && cacheCount === 0 && !findCacheFile()) {
         console.log('[nodox] Run `npx nodox init` once to enable test suite schema seeding.')
       }
 
-      // Try to detect the actual port from the app's server if it's already listening.
-      // If not, we wait for the listen() callback (patched above) or the first request.
       const server = app?._router?.server || app?.server
       if (server?.listening) {
         logStartup(server.address().port)
       } else if (!portLogged && app) {
-        // Only log placeholder if we STILL haven't captured the port via listen().
-        // For apps that use app.listen(port, () => ...), the patch will usually
-        // have fired by now. Skip if app is null (no-early-app path) — we'll log
-        // on the first request once req.app is available and routes are known.
         logStartup()
       }
     }
@@ -326,7 +240,6 @@ export default function nodox(appOrOptions, options = {}) {
     wsServer?.broadcastFullSync()
   }, 0)
 
-  // Layer 5: response interceptor + live request body observer (doesn't need app)
   const responseInterceptor = intercept
     ? createResponseInterceptor({
         parsedValueToSchema,
@@ -354,33 +267,25 @@ export default function nodox(appOrOptions, options = {}) {
       })
     : null
 
-  // Inline UI handler — only used in the no-early-app path.
-  // When app IS provided early, attachUiRoutes registers routes that handle /__nodox.
   const inlineUiHandler = !wasEarlyInit ? createUiHandler({ uiPath, getState, info }) : null
 
   return function nodoxMiddleware(req, res, next) {
-    // Late init: grab app from req.app on the first request (no-arg path)
     if (!appInitDone && req.app) {
       _initWithApp(req.app)
-      // Trigger extraction since routes may already be registered
       scheduleExtraction()
     }
 
-    // In the no-early-app case, attachUiRoutes was called AFTER routes were registered,
-    // so its routes land at the end of the stack. Serve the UI inline instead — always.
     if (inlineUiHandler && req.path.startsWith(uiPath)) {
       return inlineUiHandler(req, res, next)
     }
 
-    // Attach WebSocket on the first request (needs HTTP server reference)
     if (!serverAttached) {
       serverAttached = true
       const httpServer = req.socket?.server
       if (httpServer) {
         wsServer = new NodoxWebSocketServer({ getState })
         wsServer.attach(httpServer)
-        
-        // Log the real URL once the server is available.
+
         if (log && !portLogged) {
           const address = httpServer.address()
           const port = typeof address === 'string' ? address : address?.port

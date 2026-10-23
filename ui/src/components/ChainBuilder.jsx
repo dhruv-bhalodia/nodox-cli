@@ -1,18 +1,3 @@
-/**
- * ChainBuilder — Phase 4
- *
- * Visual canvas for wiring API endpoints into chains.
- * Each node is a route; edges represent data flow between them.
- *
- * Cycle detection (DFS) runs before any edge is accepted —
- * circular chains are rejected at the moment of connection.
- *
- * Lazy-loaded via React.lazy() — only the ~400kb React Flow chunk
- * is fetched when this tab is first opened.
- *
- * Simulation runner: topological sort → step-by-step execution
- * with {{step0.fieldName}} variable interpolation between steps.
- */
 
 import { useCallback, useState, useRef, useEffect } from 'react'
 import {
@@ -27,8 +12,6 @@ import {
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-
-// ── Cycle detection ───────────────────────────────────────────────────────────
 
 function wouldCreateCycle(edges, newEdge) {
   const adj = new Map()
@@ -49,8 +32,6 @@ function wouldCreateCycle(edges, newEdge) {
   }
   return dfs(newEdge.target)
 }
-
-// ── Topological sort (Kahn's algorithm) ──────────────────────────────────────
 
 function topoSort(nodes, edges) {
   const inDegree = new Map(nodes.map(n => [n.id, 0]))
@@ -80,8 +61,6 @@ function topoSort(nodes, edges) {
   return result
 }
 
-// ── Schema helpers ────────────────────────────────────────────────────────────
-
 function getSchemaFields(schema) {
   if (!schema || schema.type !== 'object' || !schema.properties) return null
   const required = new Set(Array.isArray(schema.required) ? schema.required : [])
@@ -109,8 +88,6 @@ function parseFieldValue(value, type) {
   return value
 }
 
-// ── Simulation helpers ────────────────────────────────────────────────────────
-
 const BODY_METHODS_SIM = new Set(['POST', 'PUT', 'PATCH'])
 
 function extractPathParamsSim(path) {
@@ -137,8 +114,6 @@ function interpolate(text, results) {
   })
 }
 
-// ── Simulation panel ──────────────────────────────────────────────────────────
-
 function SimPanel({ steps, baseUrl, onClose, savedState, stateRef }) {
   const [inputs, setInputs] = useState(() => {
     if (savedState?.inputs?.length === steps.length) return savedState.inputs
@@ -160,8 +135,6 @@ function SimPanel({ steps, baseUrl, onClose, savedState, stateRef }) {
   const [runningStep, setRunningStep] = useState(-1)
   const [expanded, setExpanded] = useState(savedState?.expanded ?? new Array(steps.length).fill(false))
 
-  // Write latest state into the shared ref every render so the parent can read
-  // it on unmount without depending on effect cleanup ordering.
   if (stateRef) stateRef.current = { inputs, results, expanded }
 
   async function runAll() {
@@ -178,7 +151,6 @@ function SimPanel({ steps, baseUrl, onClose, savedState, stateRef }) {
       const pathParams = extractPathParamsSim(path)
       const input = inputs[i]
 
-      // Resolve path params with interpolation
       let resolvedPath = path
       for (const p of pathParams) {
         const raw = input.pathParams[p] || ''
@@ -191,7 +163,6 @@ function SimPanel({ steps, baseUrl, onClose, savedState, stateRef }) {
       let resolvedBody
       if (BODY_METHODS_SIM.has(method)) {
         if (input.bodyFields.length > 0) {
-          // Build body from schema-based key-value rows, interpolating each field
           const obj = {}
           for (const f of input.bodyFields) {
             if (f.value !== '') {
@@ -403,8 +374,6 @@ function SimPanel({ steps, baseUrl, onClose, savedState, stateRef }) {
   )
 }
 
-// ── Route node ────────────────────────────────────────────────────────────────
-
 const METHOD_COLORS = {
   GET:    { border: '#22c55e', text: '#4ade80', bg: '#0d2b0d' },
   POST:   { border: '#3b82f6', text: '#60a5fa', bg: '#0d1f2b' },
@@ -437,25 +406,13 @@ function RouteNode({ data, selected, id }) {
 
 const NODE_TYPES = { route: RouteNode }
 
-// ── Unique node ID ────────────────────────────────────────────────────────────
-
 let _nodeCounter = 0
 function nextId() { return `n${++_nodeCounter}` }
 
-// ── ChainBuilder ──────────────────────────────────────────────────────────────
-
-/**
- * savedState  — nodes/edges/simOpen saved by App when ChainBuilder last unmounted.
- *               Passed back on remount so state survives Routes↔Chain tab switches.
- * onStateChange — called on unmount so App can persist the latest state.
- */
 export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedState, onStateChange }) {
-  // deleteNodeRef + onDeleteStable must be defined BEFORE useNodesState so the
-  // initialiser can attach onDelete to restored nodes without a second render pass.
   const deleteNodeRef = useRef(null)
   const onDeleteStable = useCallback((id) => { deleteNodeRef.current(id) }, [])
 
-  // Restore nodes from savedState, re-attaching the current onDelete callback.
   const [nodes, setNodes, onNodesChange] = useNodesState(
     () => (savedState?.nodes ?? []).map(n => ({
       ...n,
@@ -466,7 +423,6 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
   const [cycleError, setCycleError] = useState(null)
   const [simOpen, setSimOpen] = useState(savedState?.simOpen ?? false)
 
-  // Reconstruct placedRef from restored nodes so duplicate-route tracking works.
   const placedRef = useRef(null)
   if (placedRef.current === null) {
     const m = new Map()
@@ -476,23 +432,16 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
     placedRef.current = m
   }
 
-  const rfRef = useRef(null)     // ReactFlow instance (set via onInit)
-  const canvasRef = useRef(null) // canvas wrapper div
+  const rfRef = useRef(null)
+  const canvasRef = useRef(null)
 
-  // Track the timestamp of the last add-request we processed so that on remount
-  // the stale addRequest from the previous mount is not re-executed.
   const lastAddedT = useRef(savedState?.lastAddedT ?? null)
 
-  // Persist SimPanel inputs/results/expanded across tab switches.
   const simStateRef = useRef(savedState?.simState ?? null)
 
-  // Always keep a ref to the latest state so we can save it on unmount without
-  // adding nodes/edges/simOpen as deps to the cleanup effect.
   const latestRef = useRef({ nodes, edges, simOpen })
   latestRef.current = { nodes, edges, simOpen }
 
-  // Save state when unmounting (tab switch or page unload).
-  // Strip onDelete (non-serialisable) from node data before saving.
   useEffect(() => {
     return () => {
       const { nodes, edges, simOpen } = latestRef.current
@@ -507,12 +456,8 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
         simState: simStateRef.current,
       })
     }
-  }, []) // eslint-disable-line
+  }, [])
 
-  // ── Drag-glitch fix ───────────────────────────────────────────────────────
-  // When the simulation panel closes the canvas resizes (grid column collapses).
-  // This can leave d3-drag's pointer tracking in a stuck state for ~1 second.
-  // Dispatching pointercancel on the canvas forces d3-drag to release the pointer.
   useEffect(() => {
     if (!simOpen && canvasRef.current) {
       canvasRef.current.dispatchEvent(
@@ -521,7 +466,6 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
     }
   }, [simOpen])
 
-  // deleteNode — stored in ref so the stable callback above never goes stale
   function deleteNode(id) {
     setNodes(ns => ns.filter(n => n.id !== id))
     setEdges(es => es.filter(e => e.source !== id && e.target !== id))
@@ -546,8 +490,6 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
     const id = nextId()
     placedRef.current.set(key, id)
 
-    // Place node at current viewport center so it always appears where the user is looking.
-    // Falls back to a simple grid position if the RF instance isn't ready yet.
     let pos = { x: 100, y: 100 }
     if (rfRef.current && canvasRef.current) {
       try {
@@ -556,7 +498,6 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         })
-        // Small random jitter so back-to-back additions don't stack exactly
         pos = {
           x: flowPos.x - 70 + (Math.random() - 0.5) * 50,
           y: flowPos.y - 22 + (Math.random() - 0.5) * 50,
@@ -572,14 +513,12 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
     }])
   }
 
-  // Watch for add-route requests from App sidebar.
-  // Guard against re-executing the same request on remount by tracking its timestamp.
   useEffect(() => {
     if (addRequest?.route && addRequest.t !== lastAddedT.current) {
       lastAddedT.current = addRequest.t
       addRoute(addRequest.route)
     }
-  }, [addRequest]) // eslint-disable-line
+  }, [addRequest])
 
   function clearCanvas() {
     setNodes([])
@@ -593,7 +532,7 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
 
   return (
     <div className={`chain-builder ${simOpen ? 'chain-builder--sim' : ''}`}>
-      {/* Canvas */}
+      {}
       <div className="chain-builder__canvas" ref={canvasRef}>
         {cycleError && (
           <div className="chain-cycle-error">{cycleError}</div>
@@ -641,7 +580,7 @@ export default function ChainBuilder({ routes, baseUrl = '', addRequest, savedSt
         </ReactFlow>
       </div>
 
-      {/* Simulation panel */}
+      {}
       {simOpen && (
         <SimPanel
           key={[...nodes.map(n => n.id)].sort().join(',')}
